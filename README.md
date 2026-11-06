@@ -23,12 +23,16 @@ covers what WebDAV cannot.
 jvc add @deckyard/koofr
 ```
 
-This vendors the deck to `vendor/<scope>/koofr/`. Without `jvc`, unpack the
-`src/` subtree of a release archive (`<scope>-koofr-<version>.tar.gz`) there.
+This vendors the deck to `vendor/deckyard/koofr/`. Without `jvc`, unpack the
+`src/` subtree of a release archive (`deckyard-koofr-<version>.tar.gz`) there.
 
 ## Usage
 
 ```jennifer
+use fs;
+use io;
+use os;
+
 import "@deckyard/koofr/" as koofr;
 
 def c as koofr.Client init koofr.client(koofr.DEFAULT_URL);

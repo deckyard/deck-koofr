@@ -11,11 +11,13 @@ provider's. A bare host gets `https://`; trailing `/`, `/api/v2.1` and
 
 ```jennifer
 def c as koofr.Client init koofr.client(koofr.DEFAULT_URL);
-$c = koofr.client("https://storage.example.com");
+def own as koofr.Client init koofr.client("storage.example.com/koofr/api/v2.1");
+# $own.url is "https://storage.example.com/koofr"
 ```
 
-`client` throws for a URL with a query, a fragment or a user, a scheme other
-than `http` or `https`, no host, or a port outside 1-65535.
+`client` throws for an empty URL, spaces or control characters, a query, a
+fragment or a user, a scheme other than `http` or `https`, no host, or a port
+outside 1-65535.
 
 `withCaCert` trusts a service's own CA; `withInsecure` turns certificate
 checking off.
@@ -29,16 +31,18 @@ own.
 
 ```jennifer
 $c = koofr.withAppPassword($c, "me@example.com", os.getEnv("KOOFR_PASSWORD"));
-io.printf("%s %s\n", koofr.user($c).firstName, koofr.user($c).lastName);
+def u as koofr.User init koofr.user($c);
+io.printf("%s %s\n", $u.firstName, $u.lastName);
 ```
 
 A bearer token obtained elsewhere (OAuth) goes in with `withToken`. The deck
 does not run the OAuth flow.
 
 Credentials go over plain `http://` only to a loopback host (`localhost`,
-`127.0.0.0/8`, `[::1]`). For any other `http://` host each request throws
-before it connects; `withPlainHttp` lifts that, and the app password or
-token then crosses the network unencrypted:
+`127.0.0.0/8`, `[::1]`). To any other host each request whose URL scheme is
+not `https` throws before it connects (checked per request, so also for a
+`Client.url` set directly); `withPlainHttp` lifts that, and the app
+password or token then crosses the network unencrypted:
 
 ```jennifer
 $c = koofr.withPlainHttp(koofr.withToken(koofr.client("http://koofr.lan:8080"), $token));
@@ -57,13 +61,13 @@ def home as koofr.Mount init koofr.primaryMount($c);
 io.printf("%d of %d used\n", $home.spaceUsed, $home.spaceTotal);
 ```
 
-`limits` returns the account's limits undecoded: Koofr's API description
-defines no schema for that reply.
+`limits` returns the reply as a `json.Value`: Koofr's API description
+defines no schema for it.
 
 ## Any endpoint
 
-`call` takes the path under `/api/v2.1` with its query string, and the body
-as JSON text:
+`call` takes the method (`GET`, `POST`, `PUT`, `PATCH` or `DELETE`), the path
+under `/api/v2.1` with its query string, and the body as JSON text:
 
 ```jennifer
 def places as json.Value init koofr.call($c, "GET", "/places", "");
@@ -76,10 +80,11 @@ koofr.call($c, "PUT", "/user", '{"firstName":"Ada"}');
 value throws. `withRetries` retries GETs (`listRecursive` included) answered
 429 or 5xx, waiting 500 ms, then twice as long each time, or longer for a
 `Retry-After` in seconds, at most 30 s. It takes 0 to `MAX_RETRIES` (10).
-Writes, `get` and `put` are never retried.
+Writes (`put` included) and `get` are never retried. Redirects (3xx) are
+returned as refusals, never followed.
 
-Every reply but `get`'s is refused over `REPLY_LIMIT` (64 MiB), status line
-and headers included. `withReplyLimit` sets another cap, or none with a
+Every reply but `get`'s is refused when its body passes `REPLY_LIMIT`
+(64 MiB). `withReplyLimit` sets another cap, or none with a
 negative value. A recursive listing of a large mount is the reply most likely
 to need it:
 

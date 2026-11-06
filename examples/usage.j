@@ -5,12 +5,13 @@
 
 /**
  * Show the account's mounts with their space, the ten largest files below
- * a folder, and what the trash holds.
+ * a folder of the primary mount (default `/`), and the number of files in
+ * the trash.
  *
  *   KOOFR_EMAIL=me@example.com KOOFR_PASSWORD=app-password \
- *     jennifer run examples/usage.j /photos
+ *     jennifer run examples/usage.j [/photos]
  *
- * KOOFR_PASSWORD is an app password (Koofr: Preferences > Password).
+ * KOOFR_PASSWORD is an app password (Koofr: Preferences > Password > App passwords).
  * KOOFR_URL selects another provider of the same API.
  */
 use io;

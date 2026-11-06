@@ -4,8 +4,8 @@
 # Files
 
 Every file function takes a mount id and an absolute path in that mount.
-Paths start with `/`, have no empty, `.` or `..` segments and no trailing
-`/` (but the root, `/`).
+Paths start with `/` and have no empty, `.` or `..` segments, no control
+characters and no trailing `/` (except the root, `/`).
 
 ```jennifer
 def m as koofr.Mount init koofr.primaryMount($c);
@@ -26,15 +26,22 @@ for (def e in koofr.listFolder($c, $m.id, "/docs")) {
 }
 ```
 
-`exists` is false for a 404 whose error code is `NotFound` or absent. A 404
-with another code, such as `DeviceOffline` for a device that is not
-connected, throws: it says nothing about the file.
+`exists` is false for a 404 with Koofr's JSON error object whose code is
+`NotFound`, empty or absent. A 404 with another code, such as
+`DeviceOffline` for a device that is not connected, throws: it says nothing
+about the file. So does a 404 without that JSON body (an HTML page from a
+proxy, a wrong base URL path).
+
+`listFolder` and `listRecursive` throw on a name or path from the server
+that would not address an entry inside the folder: an empty name, `.`, `..`,
+a `/` in a name, or a recursive item path that is empty, `/` (after the
+first item), or holds `..` or empty segments.
 
 `listRecursive` returns everything below a folder in one request, the
 folder itself first, each with its full path. Koofr ends the stream with an
 error item when it breaks off (a device went offline); the deck then throws
 instead of returning a partial list. It also throws on an entry without a
-`path` or `file`. The stream is read whole and capped by the client's reply
+`path` or `file`. Item paths are relative to the requested folder. The stream is read whole and capped by the client's reply
 limit (`REPLY_LIMIT`, 64 MiB; see `withReplyLimit` in
 [Getting started](connecting.md)).
 
@@ -47,9 +54,8 @@ for (def e in koofr.listRecursive($c, $m.id, "/photos")) {
 
 ## Downloading
 
-`get` returns the file as `bytes`. `maxBytes` caps the reply, status line
-and headers included: 0 for `DOWNLOAD_LIMIT` (64 MiB), a negative number
-for no cap.
+`get` returns the file as `bytes`. `maxBytes` caps the body: 0 for
+`DOWNLOAD_LIMIT` (64 MiB), a negative number for no cap.
 
 ```jennifer
 def data as bytes init koofr.get($c, $m.id, "/docs/report.pdf", 0);
@@ -61,9 +67,8 @@ fs.writeBytes("report.pdf", $data);
 `put` takes the full path of the file; its folder must exist (`mkdirAll`
 makes it). The content is sent as the raw request body
 (`application/octet-stream`) with the name in the `filename` query
-parameter, which Koofr's API description allows besides a multipart form.
-`PutOptions` says what
-happens when the name is taken. Its zero value refuses (HTTP 409):
+parameter. `PutOptions` says what happens when the name is taken. Its zero
+value refuses (HTTP 409):
 
 ```jennifer
 koofr.mkdirAll($c, $m.id, "/backups/2026");
@@ -81,7 +86,7 @@ program saw, so two writers do not overwrite each other:
 def seen as koofr.File init koofr.info($c, $m.id, "/notes.txt");
 def guarded as koofr.PutOptions;
 $guarded.overwriteIfHash = $seen.hash;
-koofr.put($c, $m.id, "/notes.txt", $newText, $guarded);
+koofr.put($c, $m.id, "/notes.txt", fs.readBytes("notes.txt"), $guarded);
 ```
 
 ## Changing
@@ -99,6 +104,7 @@ Otherwise it asks for each parent from the top until one is missing, then
 makes that one and every folder below it without asking again.
 
 `copy` and `move` take the full target path and may target another mount.
-They return the name Koofr gave the result. `remove`, `rename`, `copy` and
-`move` refuse the root. `remove` moves to the trash; see
+They return the name Koofr gave the result. Every function that changes a
+path (`mkdir`, `put`, `remove`, `rename`, `copy`, `move`) refuses the root.
+`remove` moves to the trash; see
 [Search and trash](search.md).

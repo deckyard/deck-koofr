@@ -14,9 +14,9 @@
  *
  * A `Client` authenticates with an app password (`withAppPassword`, HTTP
  * Basic) or a bearer token (`withToken`). Every failure is
- * `Error{kind: "koofr"}`. Bodies are held in memory; `get` refuses a file over
- * `DOWNLOAD_LIMIT` (64 MiB) unless `maxBytes` says otherwise, and every other
- * reply is refused over `REPLY_LIMIT` (64 MiB) unless `withReplyLimit` says
+ * `Error{kind: "koofr"}`. Bodies are held in memory; `get` refuses a body
+ * over `DOWNLOAD_LIMIT` (64 MiB) unless `maxBytes` says otherwise, and every
+ * other reply body over `REPLY_LIMIT` (64 MiB) unless `withReplyLimit` says
  * otherwise. Credentials go over plain `http://` only to a loopback host or
  * after `withPlainHttp`.
  *
@@ -36,8 +36,8 @@ use lists;
 use maps;
 use regex;
 use strings;
+use time;
 import "http.j" as http;
-import "jsonl.j" as jsonl;
 import "uri.j" as uri;
 
 /** The `kind` of every error the deck throws. */
@@ -46,13 +46,12 @@ export def const ERROR_KIND as string init "koofr";
 /** Koofr's own service, the usual argument of `client`. */
 export def const DEFAULT_URL as string init "https://app.koofr.net";
 
-/** The largest download `get` accepts when `maxBytes` is 0: 64 MiB. */
+/** The largest body `get` accepts when `maxBytes` is 0: 64 MiB. */
 export def const DOWNLOAD_LIMIT as int init 67108864;
 
 /**
  * The largest reply body of every request but `get` when `Client.replyLimit`
- * is 0: 64 MiB. It bounds `listRecursive`, `listFolder`, `search`, `trash`
- * and `call`.
+ * is 0: 64 MiB. `listRecursive` is the reply most likely to reach it.
  */
 export def const REPLY_LIMIT as int init 67108864;
 
@@ -368,6 +367,15 @@ def const REASON as int init 200;
 # The idle timeout a `timeoutMs` of 0 stands for, as `http.send` has it.
 def const DEFAULT_TIMEOUT_MS as int init 30000;
 
+# How much of a route (query included) an error message repeats.
+def const ROUTE_SHOWN as int init 200;
+
+# The wait before the first retry; each further one doubles it.
+def const BACKOFF_MS as int init 500;
+
+# The longest wait before a retry, `Retry-After` included.
+def const MAX_BACKOFF_MS as int init 30000;
+
 func fail(message as string) {
     throw Error{kind: ERROR_KIND, message: "koofr: " + $message};
 }
@@ -447,7 +455,8 @@ func normalUrl(address as string) {
         $rest = strings.substring($rest, 0, strings.indexOf($rest, "/"));
     }
     if (strings.contains($rest, "@")) {
-        fail("a base URL holds no user or password, got " + shown($url));
+        # Scheme and host only: the user part may hold a password.
+        fail("a base URL holds no user or password, got " + shown($scheme + "://" + $u.host));
     }
     if (not regex.matches('^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])$', $u.host)) {
         fail("a base URL names a host, got " + shown($url));
@@ -569,7 +578,7 @@ export func withInsecure(c as Client) {
 
 /**
  * Allow credentials over plain `http://` to a host that is not loopback
- * (127.0.0.0/8, `::1`, `localhost`). Without it, every request with
+ * (`localhost`, 127.0.0.0/8, `[::1]`). Without it, every request with
  * credentials to such a host throws before it connects. The app password or
  * token then crosses the network unencrypted.
  *
@@ -599,8 +608,8 @@ export func withTimeout(c as Client, ms as int) {
 
 /**
  * Set the largest reply body of every request but `get` (which takes its own
- * `maxBytes`). A larger reply throws; the cap counts the status line and
- * headers too, as `http` reads them. A recursive listing of a whole mount
+ * `maxBytes`). A larger body throws; status line and headers are not
+ * counted (`http` caps them separately). A recursive listing of a whole mount
  * is the reply most likely to reach it: an NDJSON line of a file named
  * `01ab.jpg` at the top is 193 bytes, so `REPLY_LIMIT` holds about 340,000
  * such entries, fewer with longer paths.
@@ -617,8 +626,8 @@ export func withReplyLimit(c as Client, maxBytes as int) {
 /**
  * Retry a GET answered 429 or 5xx, `listRecursive` included. The first
  * retry waits 500 ms, each further one twice as long, longer for a
- * `Retry-After` in seconds, at most 30 s. Writes are never retried (they
- * need not be idempotent), nor are `get` and `put`.
+ * `Retry-After` in seconds, at most 30 s. Writes (`put` included) are never
+ * retried, as they need not be idempotent; nor is `get`.
  *
  * @param c {Client} the client
  * @param n {int} retries, 0 for none, at most `MAX_RETRIES`
@@ -682,15 +691,38 @@ func checkPath(path as string) {
     if (not strings.startsWith($path, "/") or regex.matches("[\\x00-\\x1f\\x7f]", $path)) {
         fail("a path starts with / and holds no control characters, got " + shown($path));
     }
-    if ($path == "/") {
-        return $path;
-    }
-    for (def segment in strings.split(strings.substring($path, 1, len($path)), "/")) {
-        if ($segment == "" or $segment == "." or $segment == "..") {
-            fail("a path has no empty, . or .. segments, got " + shown($path));
-        }
+    if (not goodPath($path)) {
+        fail("a path has no empty, . or .. segments, got " + shown($path));
     }
     return $path;
+}
+
+/**
+ * Whether a path passes `checkPath`.
+ *
+ * @param path {string} the path
+ * @return {bool} whether it is absolute, with no empty, `.` or `..` segments
+ *   and no control characters
+ */
+func goodPath(path as string) {
+    if ($path == "/") {
+        return true;
+    }
+    # One regex instead of a split: listRecursive checks every item.
+    return strings.startsWith($path, "/") and
+        not regex.matches('//|/\.{1,2}(/|$)|/$|[\x00-\x1f\x7f]', $path);
+}
+
+/**
+ * Whether a file or folder name passes `checkName`.
+ *
+ * @param name {string} the name
+ * @return {bool} whether it is not empty, `.` or `..` and holds no `/` or
+ *   control characters
+ */
+func goodName(name as string) {
+    return not ($name == "" or $name == "." or $name == ".." or strings.contains($name, "/") or
+        regex.matches("[\\x00-\\x1f\\x7f]", $name));
 }
 
 /**
@@ -701,8 +733,7 @@ func checkPath(path as string) {
  * @return {string} the name
  */
 func checkName(name as string) {
-    if ($name == "" or $name == "." or $name == ".." or strings.contains($name, "/") or
-        regex.matches("[\\x00-\\x1f\\x7f]", $name)) {
+    if (not goodName($name)) {
         fail("a name is not empty, . or .. and holds no / or control characters, got " +
             shown($name));
     }
@@ -737,12 +768,12 @@ func nameOf(path as string) {
  * A path below a folder.
  *
  * @param dir {string} the folder
- * @param rest {string} a name, or a path starting with `/`
- * @return {string} the joined path
+ * @param rest {string} a name, or a path starting with one `/`
+ * @return {string} the joined path; `dir` itself for "" or `/`
  */
 func joined(dir as string, rest as string) {
     def tail as string init $rest;
-    while (strings.startsWith($tail, "/")) {
+    if (strings.startsWith($tail, "/")) {
         $tail = strings.substring($tail, 1, len($tail));
     }
     if ($tail == "") {
@@ -769,20 +800,53 @@ func filesPath(mountId as string, verb as string, path as string) {
 
 /**
  * Whether a base URL names a loopback host: `localhost`, `[::1]` or an
- * address in 127.0.0.0/8.
+ * address in 127.0.0.0/8, each octet at most 255 without leading zeros.
  *
- * @param url {string} a base URL from `normalUrl`
- * @return {bool} whether it is loopback
+ * @param url {string} a base URL
+ * @return {bool} whether it is loopback; false for a URL `uri.parse` refuses
  */
 func isLoopback(url as string) {
-    def host as string init strings.lower(uri.parse($url).host);
-    return $host == "localhost" or $host == "[::1]" or
-        regex.matches('^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$', $host);
+    def host as string init "";
+    try {
+        $host = strings.lower(uri.parse($url).host);
+    } catch (e) {
+        return false;
+    }
+    if ($host == "localhost" or $host == "[::1]") {
+        return true;
+    }
+    # No leading zeros: Go does not parse `127.01.0.1` as an address and
+    # resolves it through DNS.
+    if (not regex.matches('^127(\.(0|[1-9][0-9]{0,2})){3}$', $host)) {
+        return false;
+    }
+    for (def octet in strings.split($host, ".")) {
+        if (convert.toInt($octet) > 255) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /**
- * The headers of every request. Refuses credentials over `http://` to a host
- * that is not loopback unless `plainHttp` is set.
+ * The scheme of a URL, lower-cased.
+ *
+ * @param url {string} the URL
+ * @return {string} e.g. `https`; "" for a URL `uri.parse` refuses
+ */
+func schemeOf(url as string) {
+    try {
+        return strings.lower(uri.parse($url).scheme);
+    } catch (e) {
+        return "";
+    }
+    return "";
+}
+
+/**
+ * The headers of every request. Refuses credentials to a URL whose scheme is
+ * not `https` (`Client.url` is a field and may be set directly) on a host
+ * that is not loopback, unless `plainHttp` is set.
  *
  * @param c {Client} the client
  * @return {map of string to string} the headers
@@ -790,8 +854,7 @@ func isLoopback(url as string) {
 func baseHeaders(c as Client) {
     def headers as map of string to string init {"Accept": "application/json"};
     if ($c.auth != "") {
-        if (strings.startsWith($c.url, "http://") and not $c.plainHttp and
-            not isLoopback($c.url)) {
+        if (schemeOf($c.url) != "https" and not $c.plainHttp and not isLoopback($c.url)) {
             fail("credentials go over http:// only to a loopback host; use https:// or " +
                 "withPlainHttp, got " + shown($c.url));
         }
@@ -828,7 +891,71 @@ func idleMs(c as Client) {
 }
 
 /**
- * Send a request and return the response, whatever its status.
+ * How a request is named in an error message: method and route, the route
+ * cut to `ROUTE_SHOWN` characters (a trash cursor comes from the server).
+ *
+ * @param method {string} the HTTP method
+ * @param route {string} the path under the base URL, query included
+ * @return {string} e.g. `GET /api/v2.1/user`
+ */
+func said(method as string, route as string) {
+    return $method + " " + plain($route, ROUTE_SHOWN);
+}
+
+/**
+ * The wait before a retry: `BACKOFF_MS` doubled per earlier retry, raised to
+ * a `Retry-After` in seconds, at most `MAX_BACKOFF_MS`.
+ *
+ * @param headers {map of string to string} the reply's headers, lower-case
+ *   names
+ * @param attempt {int} the retries made so far
+ * @return {int} milliseconds
+ */
+func retryDelayMs(headers as map of string to string, attempt as int) {
+    def delay as int init BACKOFF_MS;
+    def k as int init 0;
+    while ($k < $attempt and $delay < MAX_BACKOFF_MS) {
+        $delay = $delay * 2;
+        $k = $k + 1;
+    }
+    if (maps.has($headers, "retry-after")) {
+        def after as string init strings.trim($headers["retry-after"]);
+        if (regex.matches('^[0-9]+$', $after)) {
+            def ms as int init MAX_BACKOFF_MS;
+            if (len($after) <= 6) {
+                $ms = convert.toInt($after) * 1000;
+            }
+            if ($ms > $delay) {
+                $delay = $ms;
+            }
+        }
+    }
+    if ($delay > MAX_BACKOFF_MS) {
+        return MAX_BACKOFF_MS;
+    }
+    return $delay;
+}
+
+/**
+ * A body as text.
+ *
+ * @param body {bytes} the body
+ * @return {string} the text; "" when it is not UTF-8
+ */
+func bodyText(body as bytes) {
+    try {
+        return convert.stringFromBytes($body, "utf-8");
+    } catch (e) {
+        return "";
+    }
+    return "";
+}
+
+/**
+ * Send a request and return the response, whatever its status. A GET
+ * answered 429 or 5xx is retried `Client.retries` times (`retryDelayMs`).
+ * The body is read as bytes: a refusal with a body that is not UTF-8 keeps
+ * its status and reads as "" (a 2xx one is refused).
  *
  * @param c {Client} the client
  * @param method {string} the HTTP method, upper case
@@ -842,21 +969,49 @@ func sendRaw(c as Client, method as string, route as string, body as string) {
     if ($body != "") {
         $headers["Content-Type"] = "application/json";
     }
-    def o as http.Options;
-    $o.tls = $c.tls;
-    $o.timeoutMs = $c.timeoutMs;
-    $o.maxBytes = replyCap($c);
+    def retries as int init 0;
     if ($method == "GET") {
-        $o.maxRetries = $c.retries;
-        $o.backoffMs = 500;
+        $retries = $c.retries;
     }
-    def r as http.Response;
-    try {
-        $r = http.send($method, $c.url + $route, $headers, $body, $o);
-    } catch (e) {
-        fail($method + " " + $route + ": " + $e.message);
+    def attempt as int init 0;
+    def r as http.BytesResponse;
+    while (true) {
+        try {
+            $r = http.requestWithBytes(
+                $method,
+                $c.url + $route,
+                $headers,
+                $body,
+                idleMs($c),
+                replyCap($c),
+                $c.tls);
+        } catch (e) {
+            fail(said($method, $route) + ": " + $e.message);
+        }
+        if (($r.status == 429 or ($r.status >= 500 and $r.status <= 599)) and
+            $attempt < $retries) {
+            time.sleep(time.fromMilliseconds(retryDelayMs($r.headers, $attempt)));
+            $attempt = $attempt + 1;
+        } else {
+            break;
+        }
     }
-    return $r;
+    def text as string init "";
+    if ($r.status >= 200 and $r.status < 300) {
+        try {
+            $text = convert.stringFromBytes($r.body, "utf-8");
+        } catch (e) {
+            fail(said($method, $route) + ": the reply is not UTF-8");
+        }
+    } else {
+        $text = bodyText($r.body);
+    }
+    return http.Response{
+        status: $r.status,
+        statusText: $r.statusText,
+        headers: $r.headers,
+        body: $text
+    };
 }
 
 /**
@@ -871,7 +1026,7 @@ func sendRaw(c as Client, method as string, route as string, body as string) {
 func exchange(c as Client, method as string, route as string, body as string) {
     def r as http.Response init sendRaw($c, $method, $route, $body);
     if ($r.status < 200 or $r.status >= 300) {
-        fail($method + " " + $route + ": " + failureText($r.status, $r.statusText, $r.body));
+        fail(said($method, $route) + ": " + failureText($r.status, $r.statusText, $r.body));
     }
     return $r;
 }
@@ -940,7 +1095,7 @@ func decoded(body as string, what as string) {
  */
 func api(c as Client, method as string, path as string, body as string) {
     def r as http.Response init exchange($c, $method, API + $path, $body);
-    return decoded($r.body, $method + " " + API + $path);
+    return decoded($r.body, said($method, API + $path));
 }
 
 /**
@@ -1011,7 +1166,7 @@ export func user(c as Client) {
 
 /**
  * The account's limits, as Koofr sends them. The API description defines no
- * schema for this reply, so it is handed back undecoded.
+ * schema for this reply, so it is returned as a `json.Value`.
  *
  * @param c {Client} the client
  * @return {json.Value} the reply; JSON `null` when it is empty
@@ -1160,9 +1315,10 @@ export func info(c as Client, mountId as string, path as string) {
 }
 
 /**
- * Whether a reply says the file is not there: 404 with Koofr's error code
- * `NotFound` or none. A 404 with another code (`DeviceOffline`, a missing
- * mount) says nothing about the file.
+ * Whether a reply says the file is not there: 404 with a JSON body whose
+ * `error` object has the code `NotFound`, an empty one or none. A 404 with
+ * another code (`DeviceOffline`, a missing mount) or without Koofr's error
+ * object (a proxy page, a wrong base URL) says nothing about the file.
  *
  * @param r {http.Response} the reply
  * @return {bool} whether the file is missing
@@ -1171,12 +1327,16 @@ func isMissing(r as http.Response) {
     if ($r.status != 404) {
         return false;
     }
-    def code as string init "";
+    def doc as json.Value init json.decode("null");
     try {
-        $code = strings.trim(field(json.decode($r.body), "/error/code"));
+        $doc = json.decode($r.body);
     } catch (e) {
-        $code = "";
+        return false;
     }
+    if (json.typeOf($doc, "/error") != "map") {
+        return false;
+    }
+    def code as string init strings.trim(field($doc, "/error/code"));
     return $code == "" or $code == "NotFound";
 }
 
@@ -1186,10 +1346,11 @@ func isMissing(r as http.Response) {
  * @param c {Client} the client
  * @param mountId {string} the mount
  * @param path {string} the path
- * @return {bool} false when Koofr answers 404 with error code `NotFound` or
- *   none
+ * @return {bool} false when Koofr answers 404 with its JSON error object and
+ *   the code `NotFound` or none
  * @throws {Error} kind `"koofr"` on any other refusal, a 404 with another
- *   code (e.g. `DeviceOffline`), or as `call`
+ *   code (e.g. `DeviceOffline`) or without Koofr's JSON error (e.g. an HTML
+ *   page), or as `call`
  */
 export func exists(c as Client, mountId as string, path as string) {
     def route as string init API + filesPath($mountId, "info", $path);
@@ -1198,7 +1359,7 @@ export func exists(c as Client, mountId as string, path as string) {
         return false;
     }
     if ($r.status < 200 or $r.status >= 300) {
-        fail("GET " + $route + ": " + failureText($r.status, $r.statusText, $r.body));
+        fail(said("GET", $route) + ": " + failureText($r.status, $r.statusText, $r.body));
     }
     return true;
 }
@@ -1210,16 +1371,23 @@ export func exists(c as Client, mountId as string, path as string) {
  * @param mountId {string} the mount
  * @param path {string} the folder, `/` for the root
  * @return {list of File} the entries, with their full paths
- * @throws {Error} kind `"koofr"` when it does not exist, or as `call`; a
- *   reply over the client's reply limit (`REPLY_LIMIT`, 64 MiB, by default)
- *   is refused
+ * @throws {Error} kind `"koofr"` when it does not exist, on an entry whose
+ *   name is empty, `.`, `..` or holds `/` or control characters, or as
+ *   `call`; a reply over the client's reply limit (`REPLY_LIMIT`, 64 MiB, by
+ *   default) is refused
  */
 export func listFolder(c as Client, mountId as string, path as string) {
-    def d as json.Value init api($c, "GET", filesPath($mountId, "list", $path), "");
+    def route as string init filesPath($mountId, "list", $path);
+    def d as json.Value init api($c, "GET", $route, "");
     def out as list of File init [];
     for (def p in items($d, "/files")) {
-        def node as json.Value init json.get($d, $p);
-        $out[] = fileFrom($node, joined($path, field($node, "/name")));
+        def f as File init fileFrom(json.get($d, $p), "");
+        if (not goodName($f.name)) {
+            fail(said("GET", API + $route) + ": entry " + convert.toString(len($out)) +
+                " has the name " + shown($f.name) + ", not a file name");
+        }
+        $f.path = joined($path, $f.name);
+        $out[] = $f;
     }
     return $out;
 }
@@ -1236,31 +1404,43 @@ export func listFolder(c as Client, mountId as string, path as string) {
  * @return {list of File} the entries, with their full paths
  * @throws {Error} kind `"koofr"` when the folder does not exist, when the
  *   stream ends with an error item (e.g. a device went offline), on an item
- *   without a `path` or `file`, on a reply over the reply limit, or as
- *   `call`
+ *   without a `path` or `file`, on an item past the first whose path is ""
+ *   or `/` or does not join to a valid path (`..`, empty segments), on a
+ *   reply over the reply limit, or as `call`
  */
 export func listRecursive(c as Client, mountId as string, path as string) {
     def route as string init CONTENT + filesPath($mountId, "listrecursive", $path);
     def r as http.Response init exchange($c, "GET", $route, "");
-    def lines as list of json.Value init [];
-    try {
-        $lines = jsonl.decode($r.body);
-    } catch (e) {
-        fail("GET " + $route + ": the reply is not NDJSON");
-    }
     def out as list of File init [];
-    for (def item in $lines) {
+    # Line by line: each decoded item is dropped once its File is built.
+    for (def raw in strings.split($r.body, "\n")) {
+        def line as string init strings.trim($raw);
+        if ($line == "") {
+            continue;
+        }
+        def item as json.Value init json.decode("null");
+        try {
+            $item = json.decode($line);
+        } catch (e) {
+            fail(said("GET", $route) + ": the reply is not NDJSON");
+        }
         if (field($item, "/type") == "error") {
             def reason as string init field($item, "/error/message") + " (" +
                 field($item, "/error/code") + ")";
-            fail("GET " + $route + ": the listing broke off after " +
+            fail(said("GET", $route) + ": the listing broke off after " +
                 convert.toString(len($out)) + " entries: " + plain($reason, REASON));
         }
         if (json.typeOf($item, "/path") != "string" or json.typeOf($item, "/file") != "map") {
-            fail("GET " + $route + ": entry " + convert.toString(len($out)) +
+            fail(said("GET", $route) + ": entry " + convert.toString(len($out)) +
                 " has no path or file");
         }
-        $out[] = fileFrom(json.get($item, "/file"), joined($path, json.asString($item, "/path")));
+        def rel as string init json.asString($item, "/path");
+        def at as string init joined($path, $rel);
+        if (($at == $path and len($out) > 0) or not goodPath($at)) {
+            fail(said("GET", $route) + ": entry " + convert.toString(len($out)) +
+                " has the path " + shown($rel) + ", not one below the folder");
+        }
+        $out[] = fileFrom(json.get($item, "/file"), $at);
     }
     return $out;
 }
@@ -1297,9 +1477,9 @@ func isFolder(c as Client, mountId as string, path as string) {
         return false;
     }
     if ($r.status < 200 or $r.status >= 300) {
-        fail("GET " + $route + ": " + failureText($r.status, $r.statusText, $r.body));
+        fail(said("GET", $route) + ": " + failureText($r.status, $r.statusText, $r.body));
     }
-    if (field(decoded($r.body, "GET " + $route), "/type") != "dir") {
+    if (field(decoded($r.body, said("GET", $route)), "/type") != "dir") {
         fail(shown($path) + " is a file, not a folder");
     }
     return true;
@@ -1335,14 +1515,12 @@ export func mkdirAll(c as Client, mountId as string, path as string) {
 }
 
 /**
- * Download a file. `maxBytes` caps the whole reply as `http` reads it,
- * status line and headers included, so a file within a few hundred bytes of
- * the cap is refused too.
+ * Download a file into memory. No retries (see `withRetries`).
  *
  * @param c {Client} the client
  * @param mountId {string} the mount
  * @param path {string} the file
- * @param maxBytes {int} the largest reply accepted; 0 for `DOWNLOAD_LIMIT`,
+ * @param maxBytes {int} the largest body accepted; 0 for `DOWNLOAD_LIMIT`,
  *   negative for no limit
  * @return {bytes} the content
  * @throws {Error} kind `"koofr"` on a bad mount id or path, when it does not
@@ -1361,16 +1539,10 @@ export func get(c as Client, mountId as string, path as string, maxBytes as int)
     try {
         $r = http.requestWithBytes("GET", $c.url + $route, $headers, "", idleMs($c), $cap, $c.tls);
     } catch (e) {
-        fail("GET " + $route + ": " + $e.message);
+        fail(said("GET", $route) + ": " + $e.message);
     }
     if ($r.status < 200 or $r.status >= 300) {
-        def text as string init "";
-        try {
-            $text = convert.stringFromBytes($r.body, "utf-8");
-        } catch (e) {
-            $text = "";
-        }
-        fail("GET " + $route + ": " + failureText($r.status, $r.statusText, $text));
+        fail(said("GET", $route) + ": " + failureText($r.status, $r.statusText, bodyText($r.body)));
     }
     return $r.body;
 }
@@ -1416,8 +1588,8 @@ func putQuery(dir as string, name as string, opts as PutOptions) {
  * @return {File} the stored file; its name differs when `autorename` chose
  *   another
  * @throws {Error} kind `"koofr"` on a bad path, when the file exists and
- *   `opts` does not allow replacing it (HTTP 409), or on a network failure
- *   or refusal
+ *   `opts` does not allow replacing it (HTTP 409), on a network failure or
+ *   refusal, or on a 2xx reply without a valid file `name`
  */
 export func put(c as Client, mountId as string, path as string, data as bytes, opts as PutOptions) {
     if (checkPath($path) == "/") {
@@ -1440,13 +1612,16 @@ export func put(c as Client, mountId as string, path as string, data as bytes, o
             replyCap($c),
             $c.tls);
     } catch (e) {
-        fail("POST " + $route + ": " + $e.message);
+        fail(said("POST", $route) + ": " + $e.message);
     }
     if ($r.status < 200 or $r.status >= 300) {
-        fail("POST " + $route + ": " + failureText($r.status, $r.statusText, $r.body));
+        fail(said("POST", $route) + ": " + failureText($r.status, $r.statusText, $r.body));
     }
-    def d as json.Value init decoded($r.body, "POST " + $route);
-    return fileFrom($d, joined($dir, field($d, "/name")));
+    def d as json.Value init decoded($r.body, said("POST", $route));
+    if (json.typeOf($d, "/name") != "string" or not goodName(json.asString($d, "/name"))) {
+        fail(said("POST", $route) + ": the reply names no file");
+    }
+    return fileFrom($d, joined($dir, json.asString($d, "/name")));
 }
 
 /**
@@ -1606,7 +1781,7 @@ func searchQuery(query as string, opts as SearchOptions) {
  * @param c {Client} the client
  * @param query {string} the words to look for
  * @param opts {SearchOptions} filters and paging; the zero value for none
- * @return {list of SearchHit} the results, best first
+ * @return {list of SearchHit} the results, in Koofr's order
  * @throws {Error} kind `"koofr"` on a bad filter, or as `call`
  */
 export func search(c as Client, query as string, opts as SearchOptions) {
@@ -1811,6 +1986,8 @@ export func clearLinkPassword(c as Client, mountId as string, id as string) {
 
 /**
  * Limit when a public link works.
+ * The call replaces both bounds: a 0 bound is not sent, which clears one
+ * set before.
  *
  * @param c {Client} the client
  * @param mountId {string} the mount
@@ -1818,8 +1995,8 @@ export func clearLinkPassword(c as Client, mountId as string, id as string) {
  * @param validFrom {int} ms since the epoch; 0 for no start
  * @param validTo {int} ms since the epoch; 0 for no end
  * @return {Link} the changed link
- * @throws {Error} kind `"koofr"` on a window that ends before it starts, or
- *   as `call`
+ * @throws {Error} kind `"koofr"` on a negative bound or a `validTo` not
+ *   after `validFrom`, or as `call`
  */
 export func setLinkValidity(
     c as Client,
@@ -1966,6 +2143,8 @@ export func clearReceiverPassword(c as Client, mountId as string, id as string) 
 
 /**
  * Limit when a receiver accepts uploads.
+ * The call replaces both bounds: a 0 bound is not sent, which clears one
+ * set before.
  *
  * @param c {Client} the client
  * @param mountId {string} the mount
@@ -1973,8 +2152,8 @@ export func clearReceiverPassword(c as Client, mountId as string, id as string) 
  * @param validFrom {int} ms since the epoch; 0 for no start
  * @param validTo {int} ms since the epoch; 0 for no end
  * @return {Receiver} the changed receiver
- * @throws {Error} kind `"koofr"` on a window that ends before it starts, or
- *   as `call`
+ * @throws {Error} kind `"koofr"` on a negative bound or a `validTo` not
+ *   after `validFrom`, or as `call`
  */
 export func setReceiverValidity(
     c as Client,
@@ -2029,13 +2208,24 @@ export func trash(c as Client, cursor as string) {
  *   page over the client's reply limit (`REPLY_LIMIT`, 64 MiB, by default)
  */
 export func trashAll(c as Client) {
+    return trashPages($c, MAX_PAGES);
+}
+
+/**
+ * `trashAll` with its page limit as a parameter.
+ *
+ * @param c {Client} the client
+ * @param most {int} the most pages followed
+ * @return {list of TrashFile} the files
+ */
+func trashPages(c as Client, most as int) {
     def out as list of TrashFile init [];
     def cursor as string init "";
     def seen as map of string to bool init {"": true};
     def pages as int init 0;
     while (true) {
-        if ($pages >= MAX_PAGES) {
-            fail("GET " + API + "/trash: more than " + convert.toString(MAX_PAGES) + " pages");
+        if ($pages >= $most) {
+            fail("GET " + API + "/trash: more than " + convert.toString($most) + " pages");
         }
         def page as TrashPage init trash($c, $cursor);
         $pages = $pages + 1;

@@ -918,8 +918,8 @@ func testExistsOnlyNotFoundIsMissing() {
         refused(404, "DeviceOffline", "Device is offline"),
         refused(404, "Other", "Mount not found"),
         refused(404, "NotFound", "File not found"),
-        Reply{status: 404, contentType: "text/plain", body: ""},
-        Reply{status: 404, contentType: "text/html", body: "<html>"}
+        Reply{status: 404, contentType: "application/json", body: '{"error":{}}'},
+        Reply{status: 404, contentType: "application/json", body: '{"error":{"code":""}}'}
     ]);
     def c as Client init authed($f);
     try {
@@ -1247,14 +1247,14 @@ func testGetCap() {
     };
     def f as Fake init fake([$body, $body, $body]);
     def c as Client init authed($f);
-    testing.assertEqual(len(get($c, "m-1", "/a", 4096)), 5);
+    testing.assertEqual(len(get($c, "m-1", "/a", 5)), 5);
     testing.assertEqual(len(get($c, "m-1", "/a", -1)), 5);
-    # The cap counts the head as well: a 5-byte file is refused at 5.
+    # The cap counts the body only: a 5-byte file is refused at 4.
     try {
-        get($c, "m-1", "/a", 5);
+        get($c, "m-1", "/a", 4);
         missed();
     } catch (e) {
-        testing.assertContains(messageOf($e), "exceeds 5 bytes");
+        testing.assertContains(messageOf($e), "exceeds 4 bytes");
     }
     testing.assertEqual(finish($f)[0].contentType, "");
 }
@@ -1358,4 +1358,369 @@ func testSearchAndTrashFields() {
     testing.assertEqual($page.cursor, "");
     testing.assertEqual($page.retentionDays, 0);
     finish($f);
+}
+
+/** A canned reply with its own headers and a raw body. */
+def struct RawReply {
+    status as int,
+    headers as map of string to string,
+    body as bytes
+};
+
+/**
+ * Answer one request per raw reply, in order.
+ *
+ * @param srv {httpd.Server} the listening server
+ * @param replies {list of RawReply} the replies
+ * @return {list of Seen} the requests
+ */
+func serveRaw(srv as httpd.Server, replies as list of RawReply) {
+    def seen as list of Seen init [];
+    for (def r in $replies) {
+        def req as httpd.Request init httpd.accept($srv);
+        $seen[] = Seen{
+            method: httpd.method($req),
+            path: httpd.path($req),
+            query: httpd.rawQuery($req),
+            auth: httpd.header($req, "Authorization"),
+            contentType: httpd.header($req, "Content-Type"),
+            body: httpd.body($req)
+        };
+        for (def name in $r.headers) {
+            httpd.setHeader($req, $name, $r.headers[$name]);
+        }
+        httpd.respond($req, $r.status, $r.body);
+    }
+    return $seen;
+}
+
+/**
+ * Start a fake server that gives these raw replies.
+ *
+ * @param replies {list of RawReply} the replies
+ * @return {Fake} the server
+ */
+func rawFake(replies as list of RawReply) {
+    def srv as httpd.Server init httpd.listen("127.0.0.1:0");
+    def t as task of list of Seen init spawn {
+        return serveRaw($srv, $replies);
+    };
+    return Fake{srv: $srv, url: "http://" + httpd.address($srv), t: $t};
+}
+
+/**
+ * Bytes that are not UTF-8.
+ *
+ * @return {bytes} `ff fe 3c`
+ */
+func notUtf8() {
+    def junk as bytes;
+    for (def b in [255, 254, 60]) {
+        $junk[] = $b;
+    }
+    return $junk;
+}
+
+/**
+ * An NDJSON listing of a folder and one item below it.
+ *
+ * @param path {string} the item's `path`, JSON-quoted by the caller
+ * @return {Reply} the reply
+ */
+func listingWith(path as string) {
+    def top as string init '{"type":"file","path":"/","file":{"name":"d","type":"dir"}}';
+    def item as string init '{"type":"file","path":' + $path + ',"file":{"name":"x"}}';
+    return Reply{
+        status: 200,
+        contentType: "application/x-ndjson",
+        body: $top + "\n" + $item + "\n"
+    };
+}
+
+func testListFolderRefusesBadNames() {
+    def names as list of string init ['""', '"."', '".."', '"a/b"', '"../../etc/passwd"', 'null'];
+    def replies as list of Reply init [];
+    for (def n in $names) {
+        $replies[] = ok('{"files":[' + FILE + ',{"name":' + $n + ',"type":"file","size":1}]}');
+    }
+    def f as Fake init fake($replies);
+    def c as Client init authed($f);
+    for (def n in $names) {
+        try {
+            listFolder($c, "m-1", "/docs");
+            missed();
+        } catch (e) {
+            testing.assertContains(
+                messageOf($e),
+                "koofr: GET /api/v2.1/mounts/m-1/files/list?path=%2Fdocs: entry 1 has the name ");
+            testing.assertContains(messageOf($e), ", not a file name");
+        }
+    }
+    finish($f);
+}
+
+func testListRecursiveRefusesBadPaths() {
+    def bad as list of string init ['""', '"/"', '"/../../x"', '"/a//b"', '"/a/./b"', '"//"'];
+    def replies as list of Reply init [];
+    for (def p in $bad) {
+        $replies[] = listingWith($p);
+    }
+    $replies[] = Reply{
+        status: 200,
+        contentType: "application/x-ndjson",
+        body: '{"type":"file","path":"","file":{"name":"d","type":"dir"}}' + "\n"
+    };
+    def f as Fake init fake($replies);
+    def c as Client init authed($f);
+    for (def p in $bad) {
+        try {
+            listRecursive($c, "m-1", "/d");
+            missed();
+        } catch (e) {
+            testing.assertContains(messageOf($e), "entry 1 has the path ");
+            testing.assertContains(messageOf($e), "not one below the folder");
+        }
+    }
+    # The first item is the folder itself, "" or `/`.
+    def top as list of File init listRecursive($c, "m-1", "/d");
+    testing.assertEqual($top[0].path, "/d");
+    finish($f);
+}
+
+func testBaseUrlRefusalHidesThePassword() {
+    try {
+        client("https://me%40x.com:SuperSecretPw@app.koofr.net");
+        missed();
+    } catch (e) {
+        testing.assertEqual(
+            messageOf($e),
+            "koofr: a base URL holds no user or password, got \"https://app.koofr.net\"");
+        testing.assertFalse(strings.contains($e.message, "SuperSecretPw"));
+    }
+}
+
+func testCredentialsCheckTheParsedScheme() {
+    def c as Client init withAppPassword(client("https://example.com"), "me@example.com", "pw");
+    for (def url in ["HTTP://example.com", "Http://example.com", "ftp://example.com"]) {
+        $c.url = $url;
+        try {
+            baseHeaders($c);
+            missed();
+        } catch (e) {
+            testing.assertContains(messageOf($e), "credentials go over http://");
+        }
+    }
+    $c.url = "HTTPS://example.com";
+    testing.assertContains(baseHeaders($c)["Authorization"], "Basic ");
+}
+
+func testLoopbackOctetsAreChecked() {
+    for (def url in ["http://127.999.0.1", "http://127.0.0.256", "http://127.01.0.1"]) {
+        try {
+            baseHeaders(withToken(client($url), "t"));
+            missed();
+        } catch (e) {
+            testing.assertContains(messageOf($e), "credentials go over http://");
+        }
+    }
+    testing.assertTrue(isLoopback("http://127.255.0.1"));
+    testing.assertTrue(isLoopback("http://127.0.0.1:8080"));
+}
+
+func testExistsRefusesA404WithoutKoofrsError() {
+    def html as Reply init Reply{status: 404, contentType: "text/html", body: "<h1>Not Found</h1>"};
+    def f as Fake init fake([
+        $html,
+        Reply{status: 404, contentType: "text/plain", body: ""},
+        Reply{status: 404, contentType: "application/json", body: '{"message":"no"}'},
+        $html
+    ]);
+    def c as Client init impatient($f);
+    for (def i in [1, 2, 3]) {
+        try {
+            exists($c, "m-1", "/a");
+            missed();
+        } catch (e) {
+            testing.assertContains(
+                messageOf($e),
+                "koofr: GET /api/v2.1/mounts/m-1/files/info?path=%2Fa: HTTP 404");
+        }
+    }
+    # mkdirAll stops too instead of creating folders.
+    try {
+        mkdirAll($c, "m-1", "/a/b");
+        missed();
+    } catch (e) {
+        testing.assertContains(messageOf($e), "HTTP 404");
+    }
+    testing.assertEqual(len(finish($f)), 4);
+}
+
+func testPutRefusesAReplyWithoutAName() {
+    def f as Fake init fake([ok(""), ok('{"type":"file","size":5}'), ok('{"name":"../x"}')]);
+    def c as Client init authed($f);
+    def opts as PutOptions;
+    for (def i in [1, 2, 3]) {
+        try {
+            put($c, "m-1", "/docs/a.txt", convert.bytesFromString("hello", "utf-8"), $opts);
+            missed();
+        } catch (e) {
+            testing.assertContains(messageOf($e), "the reply names no file");
+        }
+    }
+    finish($f);
+}
+
+func testPutHonoursTheReplyLimit() {
+    def f as Fake init fake([ok(FILE)]);
+    def opts as PutOptions;
+    try {
+        put(withReplyLimit(authed($f), 100), "m-1", "/a.txt", notUtf8(), $opts);
+        missed();
+    } catch (e) {
+        testing.assertContains(messageOf($e), "exceeds 100 bytes");
+    }
+    finish($f);
+}
+
+func testRefusalBodyNotUtf8KeepsTheStatus() {
+    def busy as RawReply init RawReply{status: 503, headers: {}, body: notUtf8()};
+    def fine as RawReply init RawReply{
+        status: 200,
+        headers: {"Content-Type": "application/json"},
+        body: notUtf8()
+    };
+    def f as Fake init rawFake([$busy, $busy, $fine]);
+    def c as Client init authed($f);
+    try {
+        user($c);
+        missed();
+    } catch (e) {
+        testing.assertEqual(
+            messageOf($e),
+            "koofr: GET /api/v2.1/user: HTTP 503: Service Unavailable");
+    }
+    try {
+        exists($c, "m-1", "/a");
+        missed();
+    } catch (e) {
+        testing.assertContains(messageOf($e), "files/info?path=%2Fa: HTTP 503");
+    }
+    try {
+        user($c);
+        missed();
+    } catch (e) {
+        testing.assertEqual(messageOf($e), "koofr: GET /api/v2.1/user: the reply is not UTF-8");
+    }
+    finish($f);
+}
+
+func testLongCursorIsCutInMessages() {
+    # 4000 characters: `httpd` refuses a much longer request line (431).
+    def cursor as string init strings.repeat("c", 4000);
+    def f as Fake init fake([refused(500, "Internal", "boom")]);
+    try {
+        trash(authed($f), $cursor);
+        missed();
+    } catch (e) {
+        testing.assertContains(messageOf($e), "koofr: GET /api/v2.1/trash?cursor=ccc");
+        testing.assertContains($e.message, "...: HTTP 500: boom (Internal)");
+        testing.assertTrue(len($e.message) < 300);
+    }
+    testing.assertEqual(len(finish($f)[0].query), 4007);
+}
+
+func testRedirectIsNotFollowed() {
+    def other as Fake init fake([]);
+    def moved as RawReply init RawReply{
+        status: 302,
+        headers: {"Location": $other.url + "/api/v2.1/user"},
+        body: convert.bytesFromString("", "utf-8")
+    };
+    def f as Fake init rawFake([$moved, $moved, $moved]);
+    def c as Client init impatient($f);
+    try {
+        user($c);
+        missed();
+    } catch (e) {
+        testing.assertEqual(messageOf($e), "koofr: GET /api/v2.1/user: HTTP 302: Found");
+    }
+    try {
+        get($c, "m-1", "/a", 0);
+        missed();
+    } catch (e) {
+        testing.assertContains(messageOf($e), "HTTP 302: Found");
+    }
+    try {
+        def opts as PutOptions;
+        put($c, "m-1", "/a", notUtf8(), $opts);
+        missed();
+    } catch (e) {
+        testing.assertContains(messageOf($e), "HTTP 302: Found");
+    }
+    testing.assertEqual(len(finish($f)), 3);
+    testing.assertEqual(len(finish($other)), 0);
+}
+
+func testRetryDelay() {
+    testing.assertEqual(retryDelayMs({}, 0), 500);
+    testing.assertEqual(retryDelayMs({}, 2), 2000);
+    testing.assertEqual(retryDelayMs({}, 100), 30000);
+    testing.assertEqual(retryDelayMs({"retry-after": "2"}, 0), 2000);
+    testing.assertEqual(retryDelayMs({"retry-after": " 0 "}, 1), 1000);
+    testing.assertEqual(retryDelayMs({"retry-after": "9999999"}, 0), 30000);
+    testing.assertEqual(retryDelayMs({"retry-after": "Wed, 21 Oct 2015 07:28:00 GMT"}, 0), 500);
+}
+
+func testRetryAfterIsHonoured() {
+    def f as Fake init rawFake([
+        RawReply{
+            status: 429,
+            headers: {"Retry-After": "1"},
+            body: convert.bytesFromString("", "utf-8")
+        },
+        RawReply{
+            status: 200,
+            headers: {"Content-Type": "application/json"},
+            body: convert.bytesFromString('{"id":"u1"}', "utf-8")
+        }
+    ]);
+    def start as time.Time init time.now();
+    testing.assertEqual(user(withRetries(authed($f), 1)).id, "u1");
+    testing.assertTrue(time.milliseconds(time.sub(time.now(), $start)) >= 1000);
+    testing.assertEqual(len(finish($f)), 2);
+}
+
+func testExistsAndListRecursiveAreRetried() {
+    def busy as Reply init Reply{status: 503, contentType: "text/plain", body: ""};
+    def f as Fake init fake([
+        $busy,
+        refused(404, "NotFound", "File not found"),
+        $busy,
+        listingWith('"/x"'),
+        $busy
+    ]);
+    def c as Client init withRetries(impatient($f), 1);
+    testing.assertFalse(exists($c, "m-1", "/a"));
+    testing.assertEqual(len(listRecursive($c, "m-1", "/d")), 2);
+    # No retries: one request, the 503 refused.
+    try {
+        user(withRetries($c, 0));
+        missed();
+    } catch (e) {
+        testing.assertContains(messageOf($e), "HTTP 503");
+    }
+    testing.assertEqual(len(finish($f)), 5);
+}
+
+func testTrashAllRefusesPastThePageLimit() {
+    def page as string init '{"files":[{"path":"/a"}],"pageInfo":{"cursor":"';
+    def f as Fake init fake([ok($page + 'A"}}'), ok($page + 'B"}}')]);
+    try {
+        trashPages(impatient($f), 2);
+        missed();
+    } catch (e) {
+        testing.assertEqual(messageOf($e), "koofr: GET /api/v2.1/trash: more than 2 pages");
+    }
+    testing.assertEqual(len(finish($f)), 2);
 }

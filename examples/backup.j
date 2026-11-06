@@ -10,7 +10,7 @@
  *   KOOFR_EMAIL=me@example.com KOOFR_PASSWORD=app-password \
  *     jennifer run examples/backup.j report.pdf /backups/2026
  *
- * KOOFR_PASSWORD is an app password (Koofr: Preferences > Password).
+ * KOOFR_PASSWORD is an app password (Koofr: Preferences > Password > App passwords).
  * KOOFR_URL selects another provider of the same API.
  */
 use fs;
@@ -39,7 +39,10 @@ koofr.mkdirAll($c, $m.id, $folder);
 
 def opts as koofr.PutOptions;
 $opts.overwrite = true;
-def target as string init $folder + "/" + path.base(os.ARGS[1]);
+def target as string init "/" + path.base(os.ARGS[1]);
+if ($folder != "/") {
+    $target = $folder + $target;
+}
 def f as koofr.File init koofr.put($c, $m.id, $target, fs.readBytes(os.ARGS[1]), $opts);
 io.printf("stored %s, %d bytes, hash %s\n", $f.path, $f.size, $f.hash);
 

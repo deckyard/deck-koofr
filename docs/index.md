@@ -18,9 +18,13 @@ mounts, and conditional uploads.
 
 ## Conventions
 
-Snippets assume this import:
+Snippets assume this import and the `use` lines of the builtins they call
+(`io`, `os`, `fs`, `strings`, `json`):
 
 ```jennifer
+use io;
+use os;
+
 import "@deckyard/koofr/" as koofr;
 
 def c as koofr.Client init koofr.client(koofr.DEFAULT_URL);
@@ -45,6 +49,7 @@ koofr: GET /api/v2.1/mounts/1f2e.../files/info?path=%2Fmissing: HTTP 404: File n
 koofr: a path has no empty, . or .. segments, got "/a/../b"
 ```
 
+A route over 200 characters (a long trash cursor) is cut in the message.
 Bad input (a relative path, a `..` segment, an id with a `/`, credentials
 over `http://` to a host that is not loopback) is refused before anything is
 sent.

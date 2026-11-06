@@ -21,8 +21,8 @@ milliseconds since the epoch.
 |---|---|---|
 | `ERROR_KIND` | `"koofr"` | the `kind` of every error the deck throws |
 | `DEFAULT_URL` | `"https://app.koofr.net"` | Koofr's own service |
-| `DOWNLOAD_LIMIT` | `67108864` | the largest reply `get` accepts with `maxBytes` 0 (64 MiB), head included |
-| `REPLY_LIMIT` | `67108864` | the largest reply of every other request with `Client.replyLimit` 0 (64 MiB), head included |
+| `DOWNLOAD_LIMIT` | `67108864` | the largest body `get` accepts with `maxBytes` 0 (64 MiB) |
+| `REPLY_LIMIT` | `67108864` | the largest reply body of every other request with `Client.replyLimit` 0 (64 MiB) |
 | `MAX_RETRIES` | `10` | the most retries `withRetries` accepts |
 | `SEARCH_MAX` | `1000` | the most results one `search` asks for |
 | `MAX_PAGES` | `1000` | pages `trashAll` follows before it refuses |
@@ -43,7 +43,7 @@ fields.
 | `tls as http.TlsOptions` | certificate checking |
 | `timeoutMs as int` | idle timeout per request; 0 for 30 s, never negative |
 | `retries as int` | retries of a GET answered 429 or 5xx, 0 to `MAX_RETRIES` |
-| `replyLimit as int` | the largest reply of every request but `get`; 0 for `REPLY_LIMIT`, negative for none |
+| `replyLimit as int` | the largest reply body of every request but `get`; 0 for `REPLY_LIMIT`, negative for none |
 | `plainHttp as bool` | send credentials over `http://` to a host that is not loopback |
 
 Build a `Client` with `client` and the `with*` functions, not a literal.
@@ -194,15 +194,15 @@ The zero value refuses an existing file (HTTP 409).
 | `koofr.withInsecure(c)` | `Client` | accept any certificate |
 | `koofr.withTimeout(c, ms)` | `Client` | set the idle timeout; refuses a negative `ms` |
 | `koofr.withRetries(c, n)` | `Client` | retry GETs answered 429 or 5xx, `n` 0 to `MAX_RETRIES`; not `get` |
-| `koofr.withReplyLimit(c, maxBytes)` | `Client` | cap every reply but `get`'s; 0 for `REPLY_LIMIT`, negative for none |
-| `koofr.call(c, method, path, body)` | `json.Value` | any endpoint under `/api/v2.1`; `body` is JSON text |
+| `koofr.withReplyLimit(c, maxBytes)` | `Client` | cap the reply body of every request but `get`; 0 for `REPLY_LIMIT`, negative for none |
+| `koofr.call(c, method, path, body)` | `json.Value` | any endpoint under `/api/v2.1`; `method` GET, POST, PUT, PATCH or DELETE; `body` is JSON text |
 
 ## Account
 
 | Function | Returns | Does |
 |---|---|---|
 | `koofr.user(c)` | `User` | the credentials' account |
-| `koofr.limits(c)` | `json.Value` | the account's limits, undecoded |
+| `koofr.limits(c)` | `json.Value` | the account's limits, as Koofr sends them (no struct) |
 | `koofr.mounts(c)` | `list of Mount` | storage, devices and shared folders |
 | `koofr.mount(c, id)` | `Mount` | one mount |
 | `koofr.primaryMount(c)` | `Mount` | the account's primary storage |
@@ -212,13 +212,13 @@ The zero value refuses an existing file (HTTP 409).
 | Function | Returns | Does |
 |---|---|---|
 | `koofr.info(c, mountId, path)` | `File` | one file or folder |
-| `koofr.exists(c, mountId, path)` | `bool` | false on HTTP 404 with error code `NotFound` or none; another 404 throws |
-| `koofr.listFolder(c, mountId, path)` | `list of File` | the entries of a folder |
-| `koofr.listRecursive(c, mountId, path)` | `list of File` | everything below a folder, the folder first |
+| `koofr.exists(c, mountId, path)` | `bool` | false on HTTP 404 with Koofr's JSON error and code `NotFound` or none; any other 404 throws |
+| `koofr.listFolder(c, mountId, path)` | `list of File` | the entries of a folder; throws on an entry name that is not a file name |
+| `koofr.listRecursive(c, mountId, path)` | `list of File` | everything below a folder, the folder first; throws on an item path that does not lie below it |
 | `koofr.mkdir(c, mountId, path)` | - | make a folder in an existing parent |
 | `koofr.mkdirAll(c, mountId, path)` | - | make a folder and its missing parents; 1 request when it exists |
-| `koofr.get(c, mountId, path, maxBytes)` | `bytes` | download; `maxBytes` caps the reply, head included, 0 for `DOWNLOAD_LIMIT`, negative for none |
-| `koofr.put(c, mountId, path, data, opts)` | `File` | upload as a raw `application/octet-stream` body |
+| `koofr.get(c, mountId, path, maxBytes)` | `bytes` | download; `maxBytes` caps the body, 0 for `DOWNLOAD_LIMIT`, negative for none |
+| `koofr.put(c, mountId, path, data, opts)` | `File` | upload as a raw `application/octet-stream` body; the folder must exist; refuses a reply without a file `name` |
 | `koofr.remove(c, mountId, path)` | - | move a file or folder to the trash; not `/` |
 | `koofr.rename(c, mountId, path, name)` | - | rename in place; not `/` |
 | `koofr.copy(c, mountId, path, toMountId, toPath)` | `string` | copy, also to another mount; the copy's name |
@@ -241,7 +241,7 @@ The zero value refuses an existing file (HTTP 409).
 | `koofr.deleteLink(c, mountId, id)` | - | delete a link |
 | `koofr.setLinkPassword(c, mountId, id, password)` | `Link` | ask visitors for a password |
 | `koofr.clearLinkPassword(c, mountId, id)` | `Link` | remove the password |
-| `koofr.setLinkValidity(c, mountId, id, validFrom, validTo)` | `Link` | limit when it works; 0 for no bound |
+| `koofr.setLinkValidity(c, mountId, id, validFrom, validTo)` | `Link` | limit when it works; replaces both bounds, 0 for none; refuses a negative bound or an end not after the start |
 
 ## Receivers
 
@@ -254,7 +254,7 @@ The zero value refuses an existing file (HTTP 409).
 | `koofr.deleteReceiver(c, mountId, id)` | - | delete a receiver |
 | `koofr.setReceiverPassword(c, mountId, id, password)` | `Receiver` | ask uploaders for a password |
 | `koofr.clearReceiverPassword(c, mountId, id)` | `Receiver` | remove the password |
-| `koofr.setReceiverValidity(c, mountId, id, validFrom, validTo)` | `Receiver` | limit when it accepts uploads; 0 for no bound |
+| `koofr.setReceiverValidity(c, mountId, id, validFrom, validTo)` | `Receiver` | limit when it accepts uploads; replaces both bounds, 0 for none; refuses a negative bound or an end not after the start |
 
 ## Trash
 

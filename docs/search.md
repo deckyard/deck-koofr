@@ -27,15 +27,16 @@ def photos as list of koofr.SearchHit init koofr.search($c, "", $o);
 `fileType` is one of `FILE_TYPES`; `path` needs `mountId`; `tags` holds
 `key=value` filters. Page with `offset` and `limit`. `search` throws before
 sending for a `limit` outside 0..`SEARCH_MAX`, a negative `offset`, an
-unknown `fileType`, a `path` without `mountId` or a tag without a key before
-`=`.
+unknown `fileType`, a `path` without `mountId` or a tag that is not
+`key=value` with a non-empty key.
 
 ## Trash
 
 `remove` moves files to the trash, where Koofr keeps them for
 `retentionDays`. `trash` reads one page, up to 1000 files sorted by name,
-and hands back the cursor of the next; `trashAll` follows it and stops at a
-cursor it has followed before.
+and returns the cursor of the next; `trashAll` follows it, stops at an empty
+cursor, an empty page or a cursor it has followed before, and throws past
+`MAX_PAGES` pages.
 
 ```jennifer
 def page as koofr.TrashPage init koofr.trash($c, "");

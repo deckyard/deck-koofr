@@ -13,7 +13,8 @@ io.printf("%s\n", $l.shortUrl);
 ```
 
 Protect it with a password, or limit when it works (milliseconds since the
-epoch; 0 for no bound):
+epoch; an end must come after the start). Each call replaces both bounds;
+0 removes one:
 
 ```jennifer
 $l = koofr.setLinkPassword($c, $m.id, $l.id, "s3cret");
