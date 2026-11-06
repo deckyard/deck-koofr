@@ -46,6 +46,20 @@ koofr.put($c, $m.id, "/backups/2026/db.sql", fs.readBytes("db.sql"), $opts);
 io.printf("%s\n", koofr.createLink($c, $m.id, "/backups/2026/db.sql").shortUrl);
 ```
 
+Download and upload a file, no WebDAV needed:
+
+```jennifer
+def data as bytes init koofr.get($c, $m.id, "/backups/2026/db.sql", 0);
+fs.writeBytes("db-copy.sql", $data);
+def keep as koofr.PutOptions;
+koofr.put($c, $m.id, "/backups/2026/notes.txt", fs.readBytes("notes.txt"), $keep);
+```
+
+`get` caps the body at `DOWNLOAD_LIMIT` (64 MiB) for `maxBytes` 0. `put`
+with the zero `PutOptions` refuses a taken name (HTTP 409); `overwrite`
+replaces the file, `autorename` stores it as `notes (1).txt`. The returned
+`File` has the name it got.
+
 ## Requirements
 
 Jennifer 0.26.0 or newer, the default `jennifer` binary (not
