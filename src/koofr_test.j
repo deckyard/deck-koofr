@@ -129,7 +129,7 @@ func authed(f as Fake) {
  * @return {string} the body
  */
 func textOf(s as Seen) {
-    return convert.stringFromBytes($s.body, "utf-8");
+    return convert.stringFromBytes("utf-8", $s.body);
 }
 
 /**
@@ -195,7 +195,7 @@ func testClientSettings() {
     testing.assertTrue($c.tls.skipVerify);
     testing.assertEqual($c.timeoutMs, 5000);
     testing.assertEqual($c.retries, 2);
-    $c = withCaCert($c, convert.bytesFromString("PEM", "utf-8"));
+    $c = withCaCert($c, convert.bytesFromString("utf-8", "PEM"));
     testing.assertFalse($c.tls.skipVerify);
     testing.assertEqual(withToken($c, "abc").auth, "Bearer abc");
     testing.assertEqual(withAppPassword($c, "me@example.com", "app-pw").auth, BASIC);
@@ -507,7 +507,7 @@ func testGet() {
         refused(404, "NotFound", "File not found")
     ]);
     def c as Client init authed($f);
-    testing.assertEqual(convert.stringFromBytes(get($c, "m-1", "/a b.txt", 0), "utf-8"), "hello");
+    testing.assertEqual(convert.stringFromBytes("utf-8", get($c, "m-1", "/a b.txt", 0)), "hello");
     try {
         get($c, "m-1", "/a b.txt", 3);
         missed();
@@ -529,7 +529,7 @@ func testGet() {
 func testPut() {
     def f as Fake init fake([ok(FILE), ok(FILE), refused(409, "Conflict", "File exists")]);
     def c as Client init authed($f);
-    def data as bytes init convert.bytesFromString("hello", "utf-8");
+    def data as bytes init convert.bytesFromString("utf-8", "hello");
     def opts as PutOptions;
     def stored as File init put($c, "m-1", "/docs/a b.txt", $data, $opts);
     testing.assertEqual($stored.path, "/docs/a b.txt");
@@ -1270,7 +1270,7 @@ func testCallMethodsAndTls() {
     testing.assertEqual($seen[1].method, "DELETE");
     testing.assertEqual($seen[1].path, "/api/v2.1/devices/d-1");
     testing.assertEqual($seen[1].contentType, "");
-    def pem as bytes init convert.bytesFromString("PEM", "utf-8");
+    def pem as bytes init convert.bytesFromString("utf-8", "PEM");
     def tls as Client init withCaCert(withInsecure(client("x")), $pem);
     testing.assertEqual($tls.tls.caCert, $pem);
     testing.assertFalse($tls.tls.skipVerify);
@@ -1562,7 +1562,7 @@ func testPutRefusesAReplyWithoutAName() {
     def opts as PutOptions;
     for (def i in [1, 2, 3]) {
         try {
-            put($c, "m-1", "/docs/a.txt", convert.bytesFromString("hello", "utf-8"), $opts);
+            put($c, "m-1", "/docs/a.txt", convert.bytesFromString("utf-8", "hello"), $opts);
             missed();
         } catch (e) {
             testing.assertContains(messageOf($e), "the reply names no file");
@@ -1635,7 +1635,7 @@ func testRedirectIsNotFollowed() {
     def moved as RawReply init RawReply{
         status: 302,
         headers: {"Location": $other.url + "/api/v2.1/user"},
-        body: convert.bytesFromString("", "utf-8")
+        body: convert.bytesFromString("utf-8", "")
     };
     def f as Fake init rawFake([$moved, $moved, $moved]);
     def c as Client init impatient($f);
@@ -1677,12 +1677,12 @@ func testRetryAfterIsHonoured() {
         RawReply{
             status: 429,
             headers: {"Retry-After": "1"},
-            body: convert.bytesFromString("", "utf-8")
+            body: convert.bytesFromString("utf-8", "")
         },
         RawReply{
             status: 200,
             headers: {"Content-Type": "application/json"},
-            body: convert.bytesFromString('{"id":"u1"}', "utf-8")
+            body: convert.bytesFromString("utf-8", '{"id":"u1"}')
         }
     ]);
     def start as time.Time init time.now();

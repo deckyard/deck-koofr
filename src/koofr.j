@@ -944,7 +944,7 @@ func retryDelayMs(headers as map of string to string, attempt as int) {
  */
 func bodyText(body as bytes) {
     try {
-        return convert.stringFromBytes($body, "utf-8");
+        return convert.stringFromBytes("utf-8", $body);
     } catch (e) {
         return "";
     }
@@ -999,7 +999,7 @@ func sendRaw(c as Client, method as string, route as string, body as string) {
     def text as string init "";
     if ($r.status >= 200 and $r.status < 300) {
         try {
-            $text = convert.stringFromBytes($r.body, "utf-8");
+            $text = convert.stringFromBytes("utf-8", $r.body);
         } catch (e) {
             fail(said($method, $route) + ": the reply is not UTF-8");
         }
