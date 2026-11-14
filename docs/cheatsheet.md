@@ -10,8 +10,8 @@ Every export of `@deckyard/koofr`. Guides are listed in
 import "@deckyard/koofr/" as koofr;
 ```
 
-Every function that sends a request throws `Error{kind: "koofr"}` when it
-fails. A `mountId` comes from `mounts` or `primaryMount`; a `path` is
+Every function that sends a request throws a `KoofrError` (kind `"koofr"`) when
+it fails, or `Error{kind: "limit"}` when a body or the trash walk passes its cap. A `mountId` comes from `mounts` or `primaryMount`; a `path` is
 absolute in its mount (`/docs/a.txt`, `/` for the root). Times are
 milliseconds since the epoch.
 
@@ -33,6 +33,17 @@ milliseconds since the epoch.
 A literal of a deck struct names every field, so build `PutOptions` and
 `SearchOptions` from the zero value: `def o as koofr.PutOptions;` then set
 fields.
+
+### `KoofrError`
+
+Every error of kind `"koofr"`.
+
+| Field | Meaning |
+|---|---|
+| `kind as string` | always `"koofr"` |
+| `message as string` | `koofr: <request>: HTTP <status>: <reason> (<code>)`, or what went wrong |
+| `status as int` | the HTTP status Koofr answered; 0 when the failure is not a refused request |
+| `code as string` | Koofr's `error.code` (`NotFound`, `AlreadyExists`, ...); "" when none |
 
 ### `Client`
 

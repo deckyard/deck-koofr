@@ -135,11 +135,22 @@ func textOf(s as Seen) {
 /**
  * The message of the deck's error.
  *
+ * @param e {KoofrError} the error
+ * @return {string} its message
+ */
+func messageOf(e as KoofrError) {
+    testing.assertEqual($e.kind, ERROR_KIND);
+    return $e.message;
+}
+
+/**
+ * The message of a caught reached-cap error, checking its kind.
+ *
  * @param e {Error} the error
  * @return {string} its message
  */
-func messageOf(e as Error) {
-    testing.assertEqual($e.kind, ERROR_KIND);
+func limitOf(e as Error) {
+    testing.assertEqual($e.kind, "limit");
     return $e.message;
 }
 
@@ -512,7 +523,7 @@ func testGet() {
         get($c, "m-1", "/a b.txt", 3);
         missed();
     } catch (e) {
-        testing.assertContains(messageOf($e), "koofr: GET /content/api/v2.1/mounts/m-1/files/get");
+        testing.assertContains(limitOf($e), "koofr: GET /content/api/v2.1/mounts/m-1/files/get");
     }
     try {
         get($c, "m-1", "/gone", -1);
@@ -1103,7 +1114,7 @@ func testReplyLimit() {
         listFolder($c, "m-1", "/");
         missed();
     } catch (e) {
-        testing.assertContains(messageOf($e), "exceeds 100 bytes");
+        testing.assertContains(limitOf($e), "exceeds 100 bytes");
     }
     testing.assertEqual(len(listFolder(withReplyLimit($c, 0), "m-1", "/")), 1);
     finish($f);
@@ -1254,7 +1265,7 @@ func testGetCap() {
         get($c, "m-1", "/a", 4);
         missed();
     } catch (e) {
-        testing.assertContains(messageOf($e), "exceeds 4 bytes");
+        testing.assertContains(limitOf($e), "exceeds 4 bytes");
     }
     testing.assertEqual(finish($f)[0].contentType, "");
 }
@@ -1720,7 +1731,40 @@ func testTrashAllRefusesPastThePageLimit() {
         trashPages(impatient($f), 2);
         missed();
     } catch (e) {
-        testing.assertEqual(messageOf($e), "koofr: GET /api/v2.1/trash: more than 2 pages");
+        testing.assertEqual(limitOf($e), "koofr: GET /api/v2.1/trash: more than 2 pages");
     }
     testing.assertEqual(len(finish($f)), 2);
+}
+
+# A refused request is a KoofrError with the status and Koofr's error code; a
+# local check has neither.
+func testARefusalIsAKoofrError() {
+    try {
+        failHttp(
+            "GET /api/v2.1/mounts",
+            404,
+            "Not Found",
+            '{"error":{"code":"NotFound","message":"File not found"}}');
+        missed();
+    } catch (e) {
+        testing.assertEqual($e.kind, ERROR_KIND);
+        testing.assertEqual($e.status, 404);
+        testing.assertEqual($e.code, "NotFound");
+        testing.assertEqual(
+            $e.message,
+            "koofr: GET /api/v2.1/mounts: HTTP 404: File not found (NotFound)");
+    }
+    try {
+        failHttp("GET /x", 502, "Bad Gateway", "<html></html>");
+        missed();
+    } catch (e) {
+        testing.assertEqual($e.status, 502);
+        testing.assertEqual($e.code, "");
+    }
+    try {
+        fail("local");
+        missed();
+    } catch (e) {
+        testing.assertEqual($e.status, 0);
+    }
 }

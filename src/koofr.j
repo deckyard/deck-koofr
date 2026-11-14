@@ -13,8 +13,9 @@
  * URL.
  *
  * A `Client` authenticates with an app password (`withAppPassword`, HTTP
- * Basic) or a bearer token (`withToken`). Every failure is
- * `Error{kind: "koofr"}`. Bodies are held in memory; `get` refuses a body
+ * Basic) or a bearer token (`withToken`). Every failure is a `KoofrError`
+ * (kind "koofr", with the HTTP `status` and Koofr's error `code`), except a
+ * reached cap (a body over its limit, too many trash pages): kind "limit". Bodies are held in memory; `get` refuses a body
  * over `DOWNLOAD_LIMIT` (64 MiB) unless `maxBytes` says otherwise, and every
  * other reply body over `REPLY_LIMIT` (64 MiB) unless `withReplyLimit` says
  * otherwise. Credentials go over plain `http://` only to a loopback host or
@@ -376,8 +377,50 @@ def const BACKOFF_MS as int init 500;
 # The longest wait before a retry, `Retry-After` included.
 def const MAX_BACKOFF_MS as int init 30000;
 
+/**
+ * A failed Koofr request. Every error of kind `"koofr"` is one, so its fields
+ * are safe to read once the kind matches.
+ *
+ * @field kind {string} always `"koofr"` (`ERROR_KIND`)
+ * @field message {string} `koofr: <request>: HTTP <status>: <reason> (<code>)`, or what went wrong
+ * @field status {int} the HTTP status Koofr answered (404, 403, 409, ...); 0 when the failure is not a refused request
+ * @field code {string} Koofr's `error.code` (`NotFound`, `AlreadyExists`, ...); "" when the answer had none
+ */
+export def struct KoofrError {
+    kind as string,
+    message as string,
+    status as int,
+    code as string
+};
+
 func fail(message as string) {
-    throw Error{kind: ERROR_KIND, message: "koofr: " + $message};
+    throw KoofrError{kind: ERROR_KIND, message: "koofr: " + $message, status: 0, code: ""};
+}
+
+/**
+ * Throw the KoofrError of a refused request.
+ *
+ * @param what {string} the request, for the message
+ * @param status {int} the HTTP status
+ * @param statusText {string} the reason phrase
+ * @param body {string} the body
+ */
+func failHttp(what as string, status as int, statusText as string, body as string) {
+    def code as string init "";
+    try {
+        def doc as json.Value init json.decode($body);
+        if (json.typeOf($doc) == "map") {
+            $code = plain(strings.trim(field($doc, "/error/code")), REASON);
+        }
+    } catch (e) {
+        $code = "";
+    }
+    throw KoofrError{
+        kind: ERROR_KIND,
+        message: "koofr: " + $what + ": " + failureText($status, $statusText, $body),
+        status: $status,
+        code: $code
+    };
 }
 
 /**
@@ -986,6 +1029,13 @@ func sendRaw(c as Client, method as string, route as string, body as string) {
                 replyCap($c),
                 $c.tls);
         } catch (e) {
+            # a body over the reply limit stays a reached cap
+            if ($e.kind == "limit") {
+                throw Error{
+                    kind: "limit",
+                    message: "koofr: " + said($method, $route) + ": " + $e.message
+                };
+            }
             fail(said($method, $route) + ": " + $e.message);
         }
         if (($r.status == 429 or ($r.status >= 500 and $r.status <= 599)) and
@@ -1026,7 +1076,7 @@ func sendRaw(c as Client, method as string, route as string, body as string) {
 func exchange(c as Client, method as string, route as string, body as string) {
     def r as http.Response init sendRaw($c, $method, $route, $body);
     if ($r.status < 200 or $r.status >= 300) {
-        fail(said($method, $route) + ": " + failureText($r.status, $r.statusText, $r.body));
+        failHttp(said($method, $route), $r.status, $r.statusText, $r.body);
     }
     return $r;
 }
@@ -1359,7 +1409,7 @@ export func exists(c as Client, mountId as string, path as string) {
         return false;
     }
     if ($r.status < 200 or $r.status >= 300) {
-        fail(said("GET", $route) + ": " + failureText($r.status, $r.statusText, $r.body));
+        failHttp(said("GET", $route), $r.status, $r.statusText, $r.body);
     }
     return true;
 }
@@ -1477,7 +1527,7 @@ func isFolder(c as Client, mountId as string, path as string) {
         return false;
     }
     if ($r.status < 200 or $r.status >= 300) {
-        fail(said("GET", $route) + ": " + failureText($r.status, $r.statusText, $r.body));
+        failHttp(said("GET", $route), $r.status, $r.statusText, $r.body);
     }
     if (field(decoded($r.body, said("GET", $route)), "/type") != "dir") {
         fail(shown($path) + " is a file, not a folder");
@@ -1539,10 +1589,17 @@ export func get(c as Client, mountId as string, path as string, maxBytes as int)
     try {
         $r = http.requestWithBytes("GET", $c.url + $route, $headers, "", idleMs($c), $cap, $c.tls);
     } catch (e) {
+        # a body over maxBytes stays a reached cap
+        if ($e.kind == "limit") {
+            throw Error{
+                kind: "limit",
+                message: "koofr: " + said("GET", $route) + ": " + $e.message
+            };
+        }
         fail(said("GET", $route) + ": " + $e.message);
     }
     if ($r.status < 200 or $r.status >= 300) {
-        fail(said("GET", $route) + ": " + failureText($r.status, $r.statusText, bodyText($r.body)));
+        failHttp(said("GET", $route), $r.status, $r.statusText, bodyText($r.body));
     }
     return $r.body;
 }
@@ -1615,7 +1672,7 @@ export func put(c as Client, mountId as string, path as string, data as bytes, o
         fail(said("POST", $route) + ": " + $e.message);
     }
     if ($r.status < 200 or $r.status >= 300) {
-        fail(said("POST", $route) + ": " + failureText($r.status, $r.statusText, $r.body));
+        failHttp(said("POST", $route), $r.status, $r.statusText, $r.body);
     }
     def d as json.Value init decoded($r.body, said("POST", $route));
     if (json.typeOf($d, "/name") != "string" or not goodName(json.asString($d, "/name"))) {
@@ -2225,7 +2282,11 @@ func trashPages(c as Client, most as int) {
     def pages as int init 0;
     while (true) {
         if ($pages >= $most) {
-            fail("GET " + API + "/trash: more than " + convert.toString($most) + " pages");
+            throw Error{
+                kind: "limit",
+                message: "koofr: GET " + API + "/trash: more than " + convert.toString($most) +
+                    " pages"
+            };
         }
         def page as TrashPage init trash($c, $cursor);
         $pages = $pages + 1;

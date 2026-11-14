@@ -41,8 +41,10 @@ epoch, as Koofr sends them.
 
 ## Errors
 
-Every failure is `Error{kind: "koofr"}`. A refusal names the request, the
-HTTP status, Koofr's message and its error code:
+Every failure is a `koofr.KoofrError` (kind `"koofr"`), except a reached cap: a
+body over `maxBytes` or the reply limit, or `trashAll` past its page limit, is
+`Error{kind: "limit"}`. A refusal names the request, the HTTP status, Koofr's
+message and its error code, which are also the `status` and `code` fields:
 
 ```text
 koofr: GET /api/v2.1/mounts/1f2e.../files/info?path=%2Fmissing: HTTP 404: File not found (NotFound)
