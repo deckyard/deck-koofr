@@ -11,7 +11,11 @@ import "@deckyard/koofr/" as koofr;
 ```
 
 Every function that sends a request throws a `KoofrError` (kind `"koofr"`) when
-it fails, or `Error{kind: "limit"}` when a body or the trash walk passes its cap. A `mountId` comes from `mounts` or `primaryMount`; a `path` is
+it fails, or `Error{kind: "limit"}` when a body, a JSON reply's nesting or the trash
+walk passes its cap, `Error{kind: "timeout"}` when no answer comes in time,
+`Error{kind: "closed"}` when a reply is cut short, or
+a `net.NetError` (kind `"net"`, with `reason`, `sent` and `replied`) when the network
+fails, passed on unchanged. A `mountId` comes from `mounts` or `primaryMount`; a `path` is
 absolute in its mount (`/docs/a.txt`, `/` for the root). Times are
 milliseconds since the epoch.
 

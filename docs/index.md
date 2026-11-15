@@ -42,8 +42,12 @@ epoch, as Koofr sends them.
 ## Errors
 
 Every failure is a `koofr.KoofrError` (kind `"koofr"`), except a reached cap: a
-body over `maxBytes` or the reply limit, or `trashAll` past its page limit, is
-`Error{kind: "limit"}`. A refusal names the request, the HTTP status, Koofr's
+body over `maxBytes` or the reply limit, a JSON reply past the decoder's caps,
+or `trashAll` past its page limit, is `Error{kind: "limit"}`; a request with no
+answer by its deadline is `Error{kind: "timeout"}`, a reply cut short
+`Error{kind: "closed"}`; and a network failure (refused, reset, unreachable,
+DNS, TLS) is the interpreter's `net.NetError`, kind `"net"`, passed on
+unchanged with its `reason`. A refusal names the request, the HTTP status, Koofr's
 message and its error code, which are also the `status` and `code` fields:
 
 ```text

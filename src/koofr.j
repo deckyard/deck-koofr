@@ -15,7 +15,11 @@
  * A `Client` authenticates with an app password (`withAppPassword`, HTTP
  * Basic) or a bearer token (`withToken`). Every failure is a `KoofrError`
  * (kind "koofr", with the HTTP `status` and Koofr's error `code`), except a
- * reached cap (a body over its limit, too many trash pages): kind "limit". Bodies are held in memory; `get` refuses a body
+ * reached cap (a body over its limit, a JSON reply past the decoder's caps,
+ * too many trash pages): kind "limit", a request with no answer by its
+ * deadline: kind "timeout", a reply cut short: kind "closed", and a network
+ * failure (refused, reset, unreachable, DNS, TLS): the
+ * interpreter's `net.NetError` (kind "net"), passed on unchanged. Bodies are held in memory; `get` refuses a body
  * over `DOWNLOAD_LIMIT` (64 MiB) unless `maxBytes` says otherwise, and every
  * other reply body over `REPLY_LIMIT` (64 MiB) unless `withReplyLimit` says
  * otherwise. Credentials go over plain `http://` only to a loopback host or
@@ -395,6 +399,27 @@ export def struct KoofrError {
 
 func fail(message as string) {
     throw KoofrError{kind: ERROR_KIND, message: "koofr: " + $message, status: 0, code: ""};
+}
+
+/**
+ * Throw the error of a request that got no usable answer. The kinds every
+ * library shares keep their kind with the request named in front: a reached
+ * cap `"limit"`, a deadline `"timeout"`, a reply cut short `"closed"`; a
+ * cancelled task is passed on as it is; anything else is a `KoofrError`
+ * with status 0. A `net.NetError` is not an `Error`: callers rethrow it
+ * before calling this.
+ *
+ * @param what {string} the request, from `said`
+ * @param e {Error} the caught error
+ */
+func failTransport(what as string, e as Error) {
+    if ($e.kind == "cancelled") {
+        throw $e;
+    }
+    if (lists.contains(["limit", "timeout", "closed"], $e.kind)) {
+        throw Error{kind: $e.kind, message: "koofr: " + $what + ": " + $e.message};
+    }
+    fail($what + ": " + $e.message);
 }
 
 /**
@@ -1029,14 +1054,10 @@ func sendRaw(c as Client, method as string, route as string, body as string) {
                 replyCap($c),
                 $c.tls);
         } catch (e) {
-            # a body over the reply limit stays a reached cap
-            if ($e.kind == "limit") {
-                throw Error{
-                    kind: "limit",
-                    message: "koofr: " + said($method, $route) + ": " + $e.message
-                };
+            if ($e.kind == "net") {
+                throw $e;
             }
-            fail(said($method, $route) + ": " + $e.message);
+            failTransport(said($method, $route), $e);
         }
         if (($r.status == 429 or ($r.status >= 500 and $r.status <= 599)) and
             $attempt < $retries) {
@@ -1129,6 +1150,10 @@ func decoded(body as string, what as string) {
     try {
         return json.decode($body);
     } catch (e) {
+        # a decoder cap (nesting, nodes) is kind "limit": passed on unchanged
+        if ($e.kind == "limit") {
+            throw $e;
+        }
         fail($what + ": the reply is not JSON");
     }
     return json.decode("null");
@@ -1157,9 +1182,11 @@ func api(c as Client, method as string, path as string, body as string) {
  *   e.g. `/user/attributes`
  * @param body {string} the JSON body; "" for none
  * @return {json.Value} the reply; JSON `null` when it is empty
- * @throws {Error} kind `"koofr"` on a bad path, a network failure, a reply
- *   that is not 2xx (the message names the status and Koofr's reason), a
- *   2xx reply that is not JSON, or a reply over the client's reply limit
+ * @throws {Error} kind `"koofr"` on a bad path, a reply that is not 2xx
+ *   (the message names the status and Koofr's reason), or a 2xx reply that
+ *   is not JSON; kind `"limit"` for a reply over the client's reply limit or
+ *   past the decoder's caps; kind `"timeout"` when no answer comes in time
+ * @throws {net.NetError} kind `"net"` when the network fails
  * @example
  *   def places as json.Value init koofr.call($c, "GET", "/places", "");
  */
@@ -1472,6 +1499,10 @@ export func listRecursive(c as Client, mountId as string, path as string) {
         try {
             $item = json.decode($line);
         } catch (e) {
+            # a decoder cap (nesting, nodes) is kind "limit": passed on unchanged
+            if ($e.kind == "limit") {
+                throw $e;
+            }
             fail(said("GET", $route) + ": the reply is not NDJSON");
         }
         if (field($item, "/type") == "error") {
@@ -1574,8 +1605,8 @@ export func mkdirAll(c as Client, mountId as string, path as string) {
  *   negative for no limit
  * @return {bytes} the content
  * @throws {Error} kind `"koofr"` on a bad mount id or path, when it does not
- *   exist or Koofr refuses (non-2xx), on a network failure, or for a file
- *   over `maxBytes`
+ *   exist or Koofr refuses (non-2xx), or for a file over `maxBytes`
+ * @throws {net.NetError} kind `"net"` when the network fails
  */
 export func get(c as Client, mountId as string, path as string, maxBytes as int) {
     def route as string init CONTENT + filesPath($mountId, "get", $path);
@@ -1589,14 +1620,10 @@ export func get(c as Client, mountId as string, path as string, maxBytes as int)
     try {
         $r = http.requestWithBytes("GET", $c.url + $route, $headers, "", idleMs($c), $cap, $c.tls);
     } catch (e) {
-        # a body over maxBytes stays a reached cap
-        if ($e.kind == "limit") {
-            throw Error{
-                kind: "limit",
-                message: "koofr: " + said("GET", $route) + ": " + $e.message
-            };
+        if ($e.kind == "net") {
+            throw $e;
         }
-        fail(said("GET", $route) + ": " + $e.message);
+        failTransport(said("GET", $route), $e);
     }
     if ($r.status < 200 or $r.status >= 300) {
         failHttp(said("GET", $route), $r.status, $r.statusText, bodyText($r.body));
@@ -1645,8 +1672,9 @@ func putQuery(dir as string, name as string, opts as PutOptions) {
  * @return {File} the stored file; its name differs when `autorename` chose
  *   another
  * @throws {Error} kind `"koofr"` on a bad path, when the file exists and
- *   `opts` does not allow replacing it (HTTP 409), on a network failure or
- *   refusal, or on a 2xx reply without a valid file `name`
+ *   `opts` does not allow replacing it (HTTP 409), on a refusal, or on a
+ *   2xx reply without a valid file `name`
+ * @throws {net.NetError} kind `"net"` when the network fails
  */
 export func put(c as Client, mountId as string, path as string, data as bytes, opts as PutOptions) {
     if (checkPath($path) == "/") {
@@ -1669,7 +1697,10 @@ export func put(c as Client, mountId as string, path as string, data as bytes, o
             replyCap($c),
             $c.tls);
     } catch (e) {
-        fail(said("POST", $route) + ": " + $e.message);
+        if ($e.kind == "net") {
+            throw $e;
+        }
+        failTransport(said("POST", $route), $e);
     }
     if ($r.status < 200 or $r.status >= 300) {
         failHttp(said("POST", $route), $r.status, $r.statusText, $r.body);

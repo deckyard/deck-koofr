@@ -10,6 +10,7 @@
  * and hands back what it received.
  */
 use httpd;
+use net;
 use task;
 use testing;
 
@@ -1086,6 +1087,109 @@ func testCallRefusesAFragmentInTheQuery() {
     }
 }
 
+# A network failure is a net.NetError, passed on unchanged with its fields,
+# from every path a request takes: JSON calls, downloads and uploads. The
+# app password is in no message.
+func testNetworkFailuresPassOnUnchanged() {
+    def f as Fake init fake([]);
+    def c as Client init authed($f);
+    finish($f);
+    def opts as PutOptions;
+    def calls as int init 0;
+    for (def which in ["mounts", "get", "put"]) {
+        try {
+            if ($which == "mounts") {
+                mounts($c);
+            } elseif ($which == "get") {
+                get($c, "m-1", "/a.txt", 0);
+            } else {
+                put($c, "m-1", "/a.txt", convert.bytesFromString("utf-8", "x"), $opts);
+            }
+            missed();
+        } catch (e) {
+            testing.assertEqual($e.kind, "net");
+            testing.assertEqual($e.reason, "refused");
+            testing.assertEqual($e.op, "connect");
+            testing.assertFalse($e.sent);
+            testing.assertFalse($e.replied);
+            testing.assertFalse(strings.contains($e.message, "app-pw"));
+            $calls = $calls + 1;
+        }
+    }
+    testing.assertEqual($calls, 3);
+}
+
+/** A raw server that plays one connection, and its URL. */
+def struct RawServer {
+    url as string,
+    t as task of null
+};
+
+/**
+ * A raw server that accepts one connection and plays a script on it: it
+ * reads the request, writes `head` (nothing when ""), then waits `waitMs`
+ * and closes.
+ *
+ * @param head {string} what to write first
+ * @param waitMs {int} how long to keep the connection open
+ * @return {RawServer} the server; wait for its task when done
+ */
+func rawServer(head as string, waitMs as int) {
+    def l as net.Listener init net.listen("127.0.0.1:0");
+    def t as task of null init spawn {
+        def conn as net.Conn init net.accept($l);
+        # read the request, so the close is orderly and not a reset
+        net.readBytes($conn, 65536);
+        if ($head != "") {
+            net.writeBytes($conn, convert.bytesFromString("utf-8", $head));
+        }
+        time.sleep(time.fromMilliseconds($waitMs));
+        net.close($conn);
+        net.close($l);
+        return null;
+    };
+    return RawServer{url: "http://" + net.address($l), t: $t};
+}
+
+# The kinds every library shares stay as they are, the request named: a
+# server that never answers is a deadline ("timeout"), one that closes in the
+# middle of its reply "closed", and a JSON reply past the decoder's nesting
+# cap "limit".
+func testGenericKindsArePassedOn() {
+    def quiet as RawServer init rawServer("", 1500);
+    def slow as Client init withTimeout(
+        withAppPassword(client($quiet.url), "me@example.com", "app-pw"),
+        300);
+    try {
+        mounts($slow);
+        missed();
+    } catch (e) {
+        testing.assertEqual($e.kind, "timeout");
+        testing.assertTrue(strings.startsWith($e.message, "koofr: GET /api/v2.1/mounts: "));
+    }
+    task.wait($quiet.t);
+    def short as RawServer init rawServer(
+        "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n" + '{"mounts"',
+        50);
+    def cut as Client init withAppPassword(client($short.url), "me@example.com", "app-pw");
+    try {
+        mounts($cut);
+        missed();
+    } catch (e) {
+        testing.assertEqual($e.kind, "closed");
+        testing.assertTrue(strings.startsWith($e.message, "koofr: GET /api/v2.1/mounts: "));
+    }
+    task.wait($short.t);
+    def f as Fake init fake([ok(strings.repeat("[", 1100) + strings.repeat("]", 1100))]);
+    try {
+        call(authed($f), "GET", "/places", "");
+        missed();
+    } catch (e) {
+        testing.assertEqual($e.kind, "limit");
+    }
+    finish($f);
+}
+
 func testRenameRefusesTheRoot() {
     # Port 1 on loopback: a request that is sent fails with another message.
     try {
@@ -1589,7 +1693,9 @@ func testPutHonoursTheReplyLimit() {
         put(withReplyLimit(authed($f), 100), "m-1", "/a.txt", notUtf8(), $opts);
         missed();
     } catch (e) {
-        testing.assertContains(messageOf($e), "exceeds 100 bytes");
+        testing.assertEqual($e.kind, "limit");
+        testing.assertContains($e.message, "koofr: POST ");
+        testing.assertContains($e.message, "exceeds 100 bytes");
     }
     finish($f);
 }
