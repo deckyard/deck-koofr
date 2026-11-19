@@ -107,7 +107,9 @@ speaks Koofr's WebDAV endpoint.
   allows it. `Client.url` is public, so the check reads the URL as it is
   then, not as `client` built it.
 - **Address checks.** Scheme http or https, a plain host or bracketed IPv6
-  literal, a port 1 to 65535, no query, fragment or userinfo.
+  literal, a port 1 to 65535, nothing else in the authority, no query,
+  fragment or userinfo. A URL `uri.parse` refuses (newer interpreters throw
+  kind `"uri"` for a bad port or IP literal) is kind `"koofr"` too.
 - **Caps.** `REPLY_LIMIT` (64 MiB) bounds every reply but downloads,
   changed with `withReplyLimit`; a 310,341-entry recursive listing (66 MiB)
   needs more. `get` takes its own cap (0 means `DOWNLOAD_LIMIT`, 64 MiB; a
@@ -116,7 +118,7 @@ speaks Koofr's WebDAV endpoint.
 
 ## Testing and validation
 
-- 62 tests against a loopback fake built on `httpd`, answering scripted
+- 63 tests against a loopback fake built on `httpd`, answering scripted
   replies in order (raw-byte bodies, per-reply headers, redirects and
   `Retry-After` included) and recording every request; assertions cover
   exact query strings, JSON bodies and the raw upload body. No network
@@ -152,14 +154,3 @@ speaks Koofr's WebDAV endpoint.
 - Error structs with a kind (M28.50) and caps as kind `"limit"` (M28.54);
   the deck adopted both under M28.57. Network failures as `net.NetError`
   (M28.65).
-
-## History
-
-- 2026-11-06: initial commit, live checks and a hardening review (parsing,
-  transport, names and paths); 0.1.0 and 0.2.0 released.
-- 2026-11-11: name-first argument order.
-- 2026-11-14: `KoofrError` with `status` and `code`; caps are kind
-  `"limit"`.
-- 2026-11-15: network failures pass on as `net.NetError`; a deadline is
-  kind `"timeout"`, a cut reply `"closed"` and a decoder cap `"limit"` (all
-  were `"koofr"`), for 0.3.0.
