@@ -1055,6 +1055,28 @@ func testBaseUrlIsChecked() {
     }
 }
 
+# A malformed authority is the deck's own kind on every interpreter: newer
+# `uri.parse` throws kind "uri" for some, older ones split them leniently.
+func testMalformedServerUrl() {
+    for (def bad in [
+        "https://h:8x",
+        "https://h:99999",
+        "https://h:443x/sub",
+        "https://h:-1",
+        "https://[::1",
+        "[::1",
+        "https://[::1]x",
+        "https://[::1]x:443/sub"
+    ]) {
+        try {
+            client($bad);
+            missed();
+        } catch (e) {
+            testing.assertContains(messageOf($e), "a base URL");
+        }
+    }
+}
+
 func testTimeoutNotNegative() {
     testing.assertEqual(withTimeout(client("x"), 0).timeoutMs, 0);
     try {

@@ -492,8 +492,8 @@ func trimSlashes(path as string) {
 }
 
 /**
- * The base URL for a host name or URL, checked with `uri.parse`. A bare host
- * gets `https://`. The scheme is lower-cased; trailing slashes and a trailing
+ * The base URL for a host name or URL, checked with `uri.parse`: its
+ * authority is exactly host[:port]. A bare host gets `https://`. The scheme is lower-cased; trailing slashes and a trailing
  * `/content/api/v2.1` or `/api/v2.1` are dropped.
  *
  * @param address {string} `app.koofr.net` or a full URL
@@ -513,7 +513,16 @@ func normalUrl(address as string) {
     if (strings.contains($url, "?") or strings.contains($url, "#")) {
         fail("a base URL has no query or fragment, got " + shown($url));
     }
-    def u as uri.Uri init uri.parse($url);
+    def u as uri.Uri;
+    try {
+        $u = uri.parse($url);
+    } catch (e) {
+        # `uri` refuses a malformed port or IP literal (jennifer 0.27.0)
+        if ($e.kind != "uri") {
+            throw $e;
+        }
+        fail("a base URL is malformed, got " + shown($url));
+    }
     def scheme as string init strings.lower($u.scheme);
     if ($scheme != "http" and $scheme != "https") {
         fail("a base URL is http:// or https://, got " + shown($url));
@@ -537,6 +546,10 @@ func normalUrl(address as string) {
         }
         $port = ":" + $u.port;
     }
+    # Nothing between the host and the port or the path: `https://[::1]x`.
+    if ($rest != $u.host + $port) {
+        fail("a base URL names a host, got " + shown($url));
+    }
     def path as string init trimSlashes($u.path);
     if (strings.endsWith($path, CONTENT)) {
         $path = trimSlashes(strings.substring($path, 0, len($path) - len(CONTENT)));
@@ -555,7 +568,8 @@ func normalUrl(address as string) {
  * @return {Client} the client; full certificate checking
  * @throws {Error} kind `"koofr"` when the URL is empty, holds spaces or
  *   control characters, a query, a fragment or a user, has a scheme other
- *   than `http`/`https`, no host or a port outside 1-65535
+ *   than `http`/`https`, no host, a port outside 1-65535 or anything else
+ *   after the host
  * @example
  *   def c as koofr.Client init koofr.client(koofr.DEFAULT_URL);
  */
