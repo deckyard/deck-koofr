@@ -146,8 +146,9 @@ speaks Koofr's WebDAV endpoint.
 
 ## Dependencies on the interpreter
 
-- Floor `>=0.26.0`, the default binary and the `net` capability (not
-  `jennifer-tiny`).
+- Floor `>=0.27.0`, the default binary and the `net` capability (not
+  `jennifer-tiny`). The UTF-8 codecs of `encoding.encode` / `decode` and
+  `strings.replicate` arrived in 0.27.0.
 - `json.typeOf` returning `"missing"` for an unresolved pointer, `http`'s
   body-only `maxBytes`, `http.requestWithBytes` and
   `http.requestRawBodyTls`.

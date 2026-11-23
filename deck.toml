@@ -14,8 +14,9 @@ deck = "https://raw.githubusercontent.com/deckyard/deck-koofr/main/deck.toml"
 homepage = "https://github.com/deckyard/deck-koofr"
 manual = "https://deckyard.github.io/deck-koofr/"
 
-# 0.26.0: the floor for new decks. The overlay's `httpd.rawQuery` and the
-# examples' `os.hasEnv` are not in 0.25.0.
+# 0.27.0: the UTF-8 codecs of `encoding.encode` / `decode` and
+# `strings.replicate` arrived in 0.27.0. The overlay's `httpd.rawQuery` and
+# the examples' `os.hasEnv` are not in 0.25.0.
 # Only the default binary: `jennifer-tiny` has no `net` capability.
 [engines]
-jennifer = ">=0.26.0"
+jennifer = ">=0.27.0"

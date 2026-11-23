@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # SPDX-FileCopyrightText: Copyright (C) 2026 mplx <mplx@jennifer-lang.dev>
-# pragma-jennifer-version: >=0.26.0
+# pragma-jennifer-version: >=0.27.0
 # pragma-jennifer-capability: net
 
 /**
@@ -36,6 +36,7 @@
  *   }
  */
 use convert;
+use encoding;
 use json;
 use lists;
 use maps;
@@ -461,7 +462,7 @@ func plain(text as string, most as int) {
     def cut as string init $text;
     def more as string init "";
     if (len($text) > $most) {
-        $cut = strings.substring($text, 0, $most);
+        $cut = $text[..$most];
         $more = "...";
     }
     return regex.replace("[^ -~]", $cut, "?") + $more;
@@ -486,7 +487,7 @@ func shown(text as string) {
 func trimSlashes(path as string) {
     def out as string init $path;
     while (strings.endsWith($out, "/")) {
-        $out = strings.substring($out, 0, len($out) - 1);
+        $out = $out[..len($out) - 1];
     }
     return $out;
 }
@@ -527,9 +528,9 @@ func normalUrl(address as string) {
     if ($scheme != "http" and $scheme != "https") {
         fail("a base URL is http:// or https://, got " + shown($url));
     }
-    def rest as string init strings.substring($url, strings.indexOf($url, "://") + 3, len($url));
+    def rest as string init $url[strings.indexOf($url, "://") + 3..len($url)];
     if (strings.contains($rest, "/")) {
-        $rest = strings.substring($rest, 0, strings.indexOf($rest, "/"));
+        $rest = $rest[..strings.indexOf($rest, "/")];
     }
     if (strings.contains($rest, "@")) {
         # Scheme and host only: the user part may hold a password.
@@ -552,9 +553,9 @@ func normalUrl(address as string) {
     }
     def path as string init trimSlashes($u.path);
     if (strings.endsWith($path, CONTENT)) {
-        $path = trimSlashes(strings.substring($path, 0, len($path) - len(CONTENT)));
+        $path = trimSlashes($path[..len($path) - len(CONTENT)]);
     } elseif (strings.endsWith($path, API)) {
-        $path = trimSlashes(strings.substring($path, 0, len($path) - len(API)));
+        $path = trimSlashes($path[..len($path) - len(API)]);
     }
     return $scheme + "://" + $u.host + $port + $path;
 }
@@ -735,7 +736,7 @@ func ensurePath(path as string) {
     }
     def route as string init $path;
     if (strings.contains($route, "?")) {
-        $route = strings.substring($route, 0, strings.indexOf($route, "?"));
+        $route = $route[..strings.indexOf($route, "?")];
     }
     if (strings.contains($route, "//") or strings.contains($path, "#") or
         regex.matches("[\\x00-\\x20\\x7f]", $path)) {
@@ -833,7 +834,7 @@ func parentOf(path as string) {
     if ($at <= 0) {
         return "/";
     }
-    return strings.substring($path, 0, $at);
+    return $path[..$at];
 }
 
 /**
@@ -843,7 +844,7 @@ func parentOf(path as string) {
  * @return {string} the name
  */
 func nameOf(path as string) {
-    return strings.substring($path, strings.lastIndexOf($path, "/") + 1, len($path));
+    return $path[strings.lastIndexOf($path, "/") + 1..len($path)];
 }
 
 /**
@@ -856,7 +857,7 @@ func nameOf(path as string) {
 func joined(dir as string, rest as string) {
     def tail as string init $rest;
     if (strings.startsWith($tail, "/")) {
-        $tail = strings.substring($tail, 1, len($tail));
+        $tail = $tail[1..len($tail)];
     }
     if ($tail == "") {
         return $dir;
@@ -1026,7 +1027,7 @@ func retryDelayMs(headers as map of string to string, attempt as int) {
  */
 func bodyText(body as bytes) {
     try {
-        return convert.stringFromBytes("utf-8", $body);
+        return encoding.decode("utf-8", $body);
     } catch (e) {
         return "";
     }
@@ -1084,7 +1085,7 @@ func sendRaw(c as Client, method as string, route as string, body as string) {
     def text as string init "";
     if ($r.status >= 200 and $r.status < 300) {
         try {
-            $text = convert.stringFromBytes("utf-8", $r.body);
+            $text = encoding.decode("utf-8", $r.body);
         } catch (e) {
             fail(said($method, $route) + ": the reply is not UTF-8");
         }
@@ -1598,7 +1599,7 @@ export func mkdirAll(c as Client, mountId as string, path as string) {
     }
     def at as string init "/";
     def probing as bool init true;
-    for (def segment in strings.split(strings.substring($path, 1, len($path)), "/")) {
+    for (def segment in strings.split($path[1..len($path)], "/")) {
         $at = joined($at, $segment);
         if ($probing and $at != $path) {
             $probing = isFolder($c, $mountId, $at);

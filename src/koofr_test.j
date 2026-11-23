@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # SPDX-FileCopyrightText: Copyright (C) 2026 mplx <mplx@jennifer-lang.dev>
-# pragma-jennifer-version: >=0.26.0
+# pragma-jennifer-version: >=0.27.0
 
 /**
  * White-box tests for koofr: jennifer test src/koofr_test.j
@@ -130,7 +130,7 @@ func authed(f as Fake) {
  * @return {string} the body
  */
 func textOf(s as Seen) {
-    return convert.stringFromBytes("utf-8", $s.body);
+    return encoding.decode("utf-8", $s.body);
 }
 
 /**
@@ -207,7 +207,7 @@ func testClientSettings() {
     testing.assertTrue($c.tls.skipVerify);
     testing.assertEqual($c.timeoutMs, 5000);
     testing.assertEqual($c.retries, 2);
-    $c = withCaCert($c, convert.bytesFromString("utf-8", "PEM"));
+    $c = withCaCert($c, encoding.encode("utf-8", "PEM"));
     testing.assertFalse($c.tls.skipVerify);
     testing.assertEqual(withToken($c, "abc").auth, "Bearer abc");
     testing.assertEqual(withAppPassword($c, "me@example.com", "app-pw").auth, BASIC);
@@ -279,7 +279,7 @@ func testPathsAndNamesAreChecked() {
     testing.assertEqual(joined("/", "a"), "/a");
     testing.assertEqual(joined("/docs", "/"), "/docs");
     testing.assertEqual(joined("/docs", "/x/y"), "/docs/x/y");
-    def long as string init "/" + strings.repeat("x", 100) + convert.fromCodepoint(10);
+    def long as string init "/" + strings.replicate("x", 100) + convert.fromCodepoint(10);
     try {
         checkPath($long);
         missed();
@@ -297,7 +297,7 @@ func testFailureText() {
     def said as string init failureText(
         500,
         "",
-        '{"error":{"message":"one\nforged: two ' + strings.repeat("x", 500) + '"}}');
+        '{"error":{"message":"one\nforged: two ' + strings.replicate("x", 500) + '"}}');
     testing.assertFalse(strings.contains($said, convert.fromCodepoint(10)));
     testing.assertContains($said, "one?forged");
     testing.assertTrue(len($said) < 250);
@@ -519,7 +519,7 @@ func testGet() {
         refused(404, "NotFound", "File not found")
     ]);
     def c as Client init authed($f);
-    testing.assertEqual(convert.stringFromBytes("utf-8", get($c, "m-1", "/a b.txt", 0)), "hello");
+    testing.assertEqual(encoding.decode("utf-8", get($c, "m-1", "/a b.txt", 0)), "hello");
     try {
         get($c, "m-1", "/a b.txt", 3);
         missed();
@@ -541,7 +541,7 @@ func testGet() {
 func testPut() {
     def f as Fake init fake([ok(FILE), ok(FILE), refused(409, "Conflict", "File exists")]);
     def c as Client init authed($f);
-    def data as bytes init convert.bytesFromString("utf-8", "hello");
+    def data as bytes init encoding.encode("utf-8", "hello");
     def opts as PutOptions;
     def stored as File init put($c, "m-1", "/docs/a b.txt", $data, $opts);
     testing.assertEqual($stored.path, "/docs/a b.txt");
@@ -1125,7 +1125,7 @@ func testNetworkFailuresPassOnUnchanged() {
             } elseif ($which == "get") {
                 get($c, "m-1", "/a.txt", 0);
             } else {
-                put($c, "m-1", "/a.txt", convert.bytesFromString("utf-8", "x"), $opts);
+                put($c, "m-1", "/a.txt", encoding.encode("utf-8", "x"), $opts);
             }
             missed();
         } catch (e) {
@@ -1163,7 +1163,7 @@ func rawServer(head as string, waitMs as int) {
         # read the request, so the close is orderly and not a reset
         net.readBytes($conn, 65536);
         if ($head != "") {
-            net.writeBytes($conn, convert.bytesFromString("utf-8", $head));
+            net.writeBytes($conn, encoding.encode("utf-8", $head));
         }
         time.sleep(time.fromMilliseconds($waitMs));
         net.close($conn);
@@ -1178,7 +1178,8 @@ func rawServer(head as string, waitMs as int) {
 # middle of its reply "closed", and a JSON reply past the decoder's nesting
 # cap "limit".
 func testGenericKindsArePassedOn() {
-    def quiet as RawServer init rawServer("", 1500);
+    # silent 300 ms past the client's 300 ms timeout
+    def quiet as RawServer init rawServer("", 600);
     def slow as Client init withTimeout(
         withAppPassword(client($quiet.url), "me@example.com", "app-pw"),
         300);
@@ -1202,7 +1203,7 @@ func testGenericKindsArePassedOn() {
         testing.assertTrue(strings.startsWith($e.message, "koofr: GET /api/v2.1/mounts: "));
     }
     task.wait($short.t);
-    def f as Fake init fake([ok(strings.repeat("[", 1100) + strings.repeat("]", 1100))]);
+    def f as Fake init fake([ok(strings.replicate("[", 1100) + strings.replicate("]", 1100))]);
     try {
         call(authed($f), "GET", "/places", "");
         missed();
@@ -1407,7 +1408,7 @@ func testCallMethodsAndTls() {
     testing.assertEqual($seen[1].method, "DELETE");
     testing.assertEqual($seen[1].path, "/api/v2.1/devices/d-1");
     testing.assertEqual($seen[1].contentType, "");
-    def pem as bytes init convert.bytesFromString("utf-8", "PEM");
+    def pem as bytes init encoding.encode("utf-8", "PEM");
     def tls as Client init withCaCert(withInsecure(client("x")), $pem);
     testing.assertEqual($tls.tls.caCert, $pem);
     testing.assertFalse($tls.tls.skipVerify);
@@ -1699,7 +1700,7 @@ func testPutRefusesAReplyWithoutAName() {
     def opts as PutOptions;
     for (def i in [1, 2, 3]) {
         try {
-            put($c, "m-1", "/docs/a.txt", convert.bytesFromString("utf-8", "hello"), $opts);
+            put($c, "m-1", "/docs/a.txt", encoding.encode("utf-8", "hello"), $opts);
             missed();
         } catch (e) {
             testing.assertContains(messageOf($e), "the reply names no file");
@@ -1756,7 +1757,7 @@ func testRefusalBodyNotUtf8KeepsTheStatus() {
 
 func testLongCursorIsCutInMessages() {
     # 4000 characters: `httpd` refuses a much longer request line (431).
-    def cursor as string init strings.repeat("c", 4000);
+    def cursor as string init strings.replicate("c", 4000);
     def f as Fake init fake([refused(500, "Internal", "boom")]);
     try {
         trash(authed($f), $cursor);
@@ -1774,7 +1775,7 @@ func testRedirectIsNotFollowed() {
     def moved as RawReply init RawReply{
         status: 302,
         headers: {"Location": $other.url + "/api/v2.1/user"},
-        body: convert.bytesFromString("utf-8", "")
+        body: encoding.encode("utf-8", "")
     };
     def f as Fake init rawFake([$moved, $moved, $moved]);
     def c as Client init impatient($f);
@@ -1813,15 +1814,11 @@ func testRetryDelay() {
 
 func testRetryAfterIsHonoured() {
     def f as Fake init rawFake([
-        RawReply{
-            status: 429,
-            headers: {"Retry-After": "1"},
-            body: convert.bytesFromString("utf-8", "")
-        },
+        RawReply{status: 429, headers: {"Retry-After": "1"}, body: encoding.encode("utf-8", "")},
         RawReply{
             status: 200,
             headers: {"Content-Type": "application/json"},
-            body: convert.bytesFromString("utf-8", '{"id":"u1"}')
+            body: encoding.encode("utf-8", '{"id":"u1"}')
         }
     ]);
     def start as time.Time init time.now();

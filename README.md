@@ -62,7 +62,7 @@ replaces the file, `autorename` stores it as `notes (1).txt`. The returned
 
 ## Requirements
 
-Jennifer 0.26.0 or newer, the default `jennifer` binary (not
+Jennifer 0.27.0 or newer, the default `jennifer` binary (not
 `jennifer-tiny`), and the `net` capability. Uploads and downloads are held
 in memory: the interpreter's `http` module does not stream yet.
 
