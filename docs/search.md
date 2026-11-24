@@ -6,7 +6,7 @@
 ## Search
 
 `search` looks for names across every mount. `SearchOptions` narrows it;
-its zero value searches everything with Koofr's default limit (256 hits).
+its zero value searches everything with Koofr™'s default limit (256 hits).
 
 ```jennifer
 def none as koofr.SearchOptions;

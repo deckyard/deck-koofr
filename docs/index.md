@@ -3,7 +3,7 @@
 
 # @deckyard/koofr
 
-A client for the [Koofr](https://koofr.eu/) cloud storage API (`/api/v2.1`).
+A client for the [Koofr™](https://koofr.eu/) cloud storage API (`/api/v2.1`).
 Typed functions cover the account and its mounts, files and folders
 (information, listing, recursive listing, folders, download, upload,
 remove, rename, copy, move), search, public links, receivers (upload links)
@@ -71,3 +71,10 @@ the whole stream before parsing it (capped by `REPLY_LIMIT` or
 
 Jennifer 0.27.0 or newer, the default `jennifer` binary (not
 `jennifer-tiny`), and the `net` capability.
+
+## Trademarks
+
+Koofr™ and other product and company names may be trademarks of their
+respective owners. They are used only to identify the products this deck
+works with. This deck is an independent project, not affiliated with,
+sponsored or endorsed by Koofr d.o.o.

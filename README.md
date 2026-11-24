@@ -4,7 +4,7 @@
 [![Documentation](https://img.shields.io/badge/docs-github%20pages-blue)](https://deckyard.github.io/deck-koofr/)
 [![release](https://img.shields.io/github/v/release/deckyard/deck-koofr)](https://github.com/deckyard/deck-koofr/releases/latest)
 
-A client for the [Koofr](https://koofr.eu/) cloud storage API, for
+A client for the [Koofr™](https://koofr.eu/) cloud storage API, for
 [Jennifer](https://jennifer-lang.dev/) programs: the account and its mounts,
 files and folders (list, recursive list, download, upload with overwrite
 conditions, rename, copy and move across mounts), search, public links,
@@ -81,3 +81,10 @@ LGPL-3.0-only, see [LICENSE](LICENSE). Copyright (C) 2026 mplx &lt;mplx@jennifer
 
 `tools/check-headers.sh` checks every source file's SPDX header against
 `deck.toml`.
+
+## Trademarks
+
+Koofr™ and other product and company names may be trademarks of their
+respective owners. They are used only to identify the products this deck
+works with. This deck is an independent project, not affiliated with,
+sponsored or endorsed by Koofr d.o.o.

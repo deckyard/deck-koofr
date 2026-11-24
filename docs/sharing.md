@@ -48,5 +48,5 @@ The functions mirror the links: `receivers`, `allReceivers`, `receiver`,
 `deleteReceiver`, `setReceiverPassword`, `clearReceiverPassword`,
 `setReceiverValidity`.
 
-Koofr limits how many links and receivers an account has; past it, creating
+Koofr™ limits how many links and receivers an account has; past it, creating
 one fails with HTTP 429.

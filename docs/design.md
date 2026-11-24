@@ -5,7 +5,7 @@
 
 ## Scope
 
-A client for the Koofr cloud storage API v2.1 over HTTPS: the user, limits
+A client for the Koofr™ cloud storage API v2.1 over HTTPS: the user, limits
 and mounts; files by mount id and path (`info`, `exists`, `listFolder`,
 `listRecursive`, `mkdir`, `mkdirAll`, `get`, `put`, `remove`, `rename`,
 cross-mount `copy` and `move`); search; public links and receivers; the

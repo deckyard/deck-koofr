@@ -5,7 +5,7 @@
 
 ## The address
 
-`client` takes the service's base URL: `DEFAULT_URL` for Koofr, or another
+`client` takes the service's base URL: `DEFAULT_URL` for Koofr™, or another
 provider's. A bare host gets `https://`; trailing `/`, `/api/v2.1` and
 `/content/api/v2.1` are dropped, a sub-path is kept:
 

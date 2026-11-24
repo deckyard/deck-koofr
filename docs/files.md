@@ -26,7 +26,7 @@ for (def e in koofr.listFolder($c, $m.id, "/docs")) {
 }
 ```
 
-`exists` is false for a 404 with Koofr's JSON error object whose code is
+`exists` is false for a 404 with Koofr™'s JSON error object whose code is
 `NotFound`, empty or absent. A 404 with another code, such as
 `DeviceOffline` for a device that is not connected, throws: it says nothing
 about the file. So does a 404 without that JSON body (an HTML page from a

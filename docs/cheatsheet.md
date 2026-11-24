@@ -24,7 +24,7 @@ milliseconds since the epoch.
 | Constant | Value | Meaning |
 |---|---|---|
 | `ERROR_KIND` | `"koofr"` | the `kind` of every error the deck throws |
-| `DEFAULT_URL` | `"https://app.koofr.net"` | Koofr's own service |
+| `DEFAULT_URL` | `"https://app.koofr.net"` | Koofr™'s own service |
 | `DOWNLOAD_LIMIT` | `67108864` | the largest body `get` accepts with `maxBytes` 0 (64 MiB) |
 | `REPLY_LIMIT` | `67108864` | the largest reply body of every other request with `Client.replyLimit` 0 (64 MiB) |
 | `MAX_RETRIES` | `10` | the most retries `withRetries` accepts |
