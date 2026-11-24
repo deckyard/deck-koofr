@@ -1247,7 +1247,7 @@ func testReplyLimit() {
     finish($f);
     testing.assertEqual(REPLY_LIMIT, 67108864);
     testing.assertEqual(replyCap(client("x")), REPLY_LIMIT);
-    testing.assertEqual(replyCap(withReplyLimit(client("x"), -1)), -1);
+    testing.assertEqual(replyCap(withReplyLimit(client("x"), -1)), NO_LIMIT);
 }
 
 func testListRecursiveRefusesAnEntryWithoutPathOrFile() {
