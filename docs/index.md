@@ -69,7 +69,7 @@ the whole stream before parsing it (capped by `REPLY_LIMIT` or
 
 ## Requirements
 
-Jennifer 0.27.0 or newer, the default `jennifer` binary (not
+Jennifer 0.28.0 or newer, the default `jennifer` binary (not
 `jennifer-tiny`), and the `net` capability.
 
 ## Trademarks
